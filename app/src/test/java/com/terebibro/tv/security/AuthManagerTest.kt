@@ -1,5 +1,7 @@
 package com.terebibro.tv.security
 
+import com.terebibro.tv.net.LocalNetwork
+import com.terebibro.tv.server.AuthManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -241,5 +243,51 @@ class AuthManagerTest {
         registry.touch("id-$a", 999L)
         assertEquals(999L, registry.findByHash(a)?.lastSeen)
         assertEquals(1L, registry.findByHash(b)?.lastSeen)
+    }
+
+    // ------------------------------------------------------ peer / host policy
+
+    // AuthManager needs a ConfigStore and a LocalNetwork, both of which require
+    // an Android Context, so its instance methods cannot be built on the JVM.
+    // They delegate to the pure companion policy exercised here; this is the
+    // same seam the release and debug builds share.
+
+    private val device = LocalNetwork.Info(ip = "10.0.2.15", prefixLength = 24, network = "wifi")
+
+    @Test
+    fun `loopback peers and the localhost Host forms stay closed by default`() {
+        assertFalse(AuthManager.isPeerAllowed("127.0.0.1", device, allowLocalhost = false))
+
+        val hosts = AuthManager.allowedHosts("10.0.2.15", 8765, "terebi-tv", allowLocalhost = false)
+        assertEquals(listOf("10.0.2.15:8765", "terebi-tv.local:8765"), hosts)
+        assertFalse("localhost:8765" in hosts)
+        assertFalse("127.0.0.1:8765" in hosts)
+    }
+
+    @Test
+    fun `debug mode accepts loopback but still rejects the device and off-subnet peers`() {
+        assertTrue(AuthManager.isPeerAllowed("127.0.0.1", device, allowLocalhost = true))
+        assertTrue(AuthManager.isPeerAllowed("127.9.9.9", device, allowLocalhost = true))
+        // The device's own address and off-subnet peers stay rejected.
+        assertFalse(AuthManager.isPeerAllowed(device.ip, device, allowLocalhost = true))
+        assertFalse(AuthManager.isPeerAllowed("192.168.9.9", device, allowLocalhost = true))
+        // Null/empty peers and a non-loopback peer with no known LAN are never allowed.
+        assertFalse(AuthManager.isPeerAllowed(null, device, allowLocalhost = true))
+        assertFalse(AuthManager.isPeerAllowed("", device, allowLocalhost = true))
+        assertFalse(AuthManager.isPeerAllowed("10.0.2.99", null, allowLocalhost = true))
+    }
+
+    @Test
+    fun `debug mode adds the localhost Host forms and keeps the production entries`() {
+        val hosts = AuthManager.allowedHosts("10.0.2.15", 8765, "terebi-tv", allowLocalhost = true)
+        assertEquals(
+            listOf(
+                "10.0.2.15:8765",
+                "terebi-tv.local:8765",
+                "localhost:8765",
+                "127.0.0.1:8765"
+            ),
+            hosts
+        )
     }
 }

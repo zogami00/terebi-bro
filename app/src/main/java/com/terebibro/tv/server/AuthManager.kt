@@ -26,7 +26,13 @@ class AuthManager(
      * it is listening. The bound port is authoritative: a fallback bind must
      * never leave the Host allowlist pointing at the configured port.
      */
-    private val boundAddress: () -> Pair<String, Int>? = { null }
+    private val boundAddress: () -> Pair<String, Int>? = { null },
+    /**
+     * Debug-only: accept loopback peers and the localhost Host/Origin forms so the
+     * controller can be driven from a host browser through `adb forward`. Always
+     * false in release builds.
+     */
+    private val allowLocalhost: Boolean = false
 ) {
 
     val tokens = TokenRegistry(config.tokenStorage)
@@ -59,20 +65,12 @@ class AuthManager(
         val bound = boundAddress()
         val ip = bound?.first ?: localNetwork.current()?.ip ?: return emptyList()
         val port = bound?.second ?: config.controllerPort
-        return listOf(
-            "$ip:$port".lowercase(),
-            "${config.mdnsName}.local:$port".lowercase()
-        )
+        return allowedHosts(ip, port, config.mdnsName, allowLocalhost)
     }
 
     /** Loopback, own-address and off-subnet peers are rejected. */
-    fun isPeerAllowed(peerIp: String?): Boolean {
-        if (peerIp.isNullOrEmpty()) return false
-        if (SubnetMatcher.isLoopback(peerIp)) return false
-        val info = localNetwork.current() ?: return false
-        if (peerIp == info.ip) return false
-        return SubnetMatcher.isSameSubnet(peerIp, info.ip, info.prefixLength)
-    }
+    fun isPeerAllowed(peerIp: String?): Boolean =
+        isPeerAllowed(peerIp, localNetwork.current(), allowLocalhost)
 
     fun isHostAllowed(host: String?): Boolean = HostMatcher.isHostAllowed(host, allowedHosts())
 
@@ -151,6 +149,55 @@ class AuthManager(
     fun currentPin(): String? = pinManager.currentPin()
 
     fun clearPin() = pinManager.clearPin()
+
+    /**
+     * Pure-JVM peer and Host policy, extracted so it is unit testable without
+     * the Android framework ([AuthManager] itself needs a [ConfigStore] and a
+     * [LocalNetwork], both of which require a `Context`). The instance methods
+     * delegate here, so the release and debug paths cannot diverge.
+     */
+    companion object {
+
+        /**
+         * Loopback, own-address and off-subnet peers are rejected. When
+         * [allowLocalhost] is true (debug only) a loopback peer is accepted
+         * instead of rejected; everything else is unchanged.
+         */
+        fun isPeerAllowed(
+            peerIp: String?,
+            info: LocalNetwork.Info?,
+            allowLocalhost: Boolean
+        ): Boolean {
+            if (peerIp.isNullOrEmpty()) return false
+            if (SubnetMatcher.isLoopback(peerIp)) return allowLocalhost
+            if (info == null) return false
+            if (peerIp == info.ip) return false
+            return SubnetMatcher.isSameSubnet(peerIp, info.ip, info.prefixLength)
+        }
+
+        /**
+         * `ip:port` and `<mdnsName>.local:port`, lowercase. When [allowLocalhost]
+         * is true (debug only) `localhost:port` and `127.0.0.1:port` are added so
+         * a host browser reaching the emulator through `adb forward` is accepted;
+         * the two production entries are unchanged.
+         */
+        fun allowedHosts(
+            ip: String,
+            port: Int,
+            mdnsName: String,
+            allowLocalhost: Boolean
+        ): List<String> {
+            val hosts = mutableListOf(
+                "$ip:$port".lowercase(),
+                "$mdnsName.local:$port".lowercase()
+            )
+            if (allowLocalhost) {
+                hosts.add("localhost:$port")
+                hosts.add("127.0.0.1:$port")
+            }
+            return hosts
+        }
+    }
 }
 
 /** Simple token-bucket limiter keyed by token hash or peer address. */

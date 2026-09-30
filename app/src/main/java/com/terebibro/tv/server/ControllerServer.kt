@@ -47,6 +47,14 @@ class ControllerServer(
     private val apiRoutes: ApiRoutes,
     private val wsHub: WsHub,
     /**
+     * Debug-only: bind the wildcard address instead of the LAN address so a
+     * NAT'd emulator's loopback is reachable through `adb forward`. Always false
+     * in release builds. [boundIp] still records the advertised LAN address, so
+     * the Host allowlist, the TV overlay URL and the mDNS advertisement are
+     * unaffected.
+     */
+    private val allowLocalhostBind: Boolean = false,
+    /**
      * Invoked whenever the listener comes up on a port that differs from the
      * previous one, including after a successful fallback retry. Lets the owner
      * re-advertise the actual port over mDNS; without it the SRV record would
@@ -114,7 +122,7 @@ class ControllerServer(
                 adopt(oldServer, oldIp, port, desiredPort)
                 return
             }
-            val instance = HttpServer(info.ip, port)
+            val instance = HttpServer(BindHost.of(allowLocalhostBind, info.ip), port)
             try {
                 instance.start(SOCKET_READ_TIMEOUT_MS, false)
                 if (oldServer != null && oldServer !== instance) {
@@ -242,7 +250,7 @@ class ControllerServer(
         return ip to boundPort
     }
 
-    private inner class HttpServer(host: String, port: Int) : NanoWSD(host, port) {
+    private inner class HttpServer(host: String?, port: Int) : NanoWSD(host, port) {
 
         init {
             setAsyncRunner(BoundedAsyncRunner(MAX_CONNECTIONS, perPeerLimiter))

@@ -47,6 +47,16 @@
             android:textColor="#FFFFFF"
             android:text="@string/ip_label" />
 
+        <!-- Debug-only adb-forward hint; hidden (and unused) in release. -->
+        <TextView
+            android:id="@+id/info_debug_url"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="18sp"
+            android:textColor="#FFD166"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/info_pin"
             android:layout_width="wrap_content"

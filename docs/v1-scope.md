@@ -28,6 +28,10 @@ What the first release ships, and what was intentionally left out.
   `/api/dpad`, `/api/settings/device-name`, `/api/settings/port`.
 - WebSocket at `/ws` with 250 ms-coalesced state broadcasts, heartbeat and
   in-band authentication.
+- Debug-only (`BuildConfig.DEBUG`) emulator affordance: the server also binds
+  the wildcard address and accepts loopback peers and the `localhost` /
+  `127.0.0.1` Host forms, so `adb forward tcp:8765 tcp:8765` reaches a NAT'd
+  emulator. Release builds never take this path and stay LAN-subnet-only.
 
 **Discovery**
 

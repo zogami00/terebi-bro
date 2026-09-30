@@ -19,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import com.terebibro.tv.BuildConfig
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.mdns.MdnsAdvertiser
@@ -55,6 +56,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var infoDeviceName: TextView
     private lateinit var infoControllerUrl: TextView
     private lateinit var infoIpUrl: TextView
+    private lateinit var infoDebugUrl: TextView
     private lateinit var infoPin: TextView
     private lateinit var infoPairButton: Button
     private lateinit var infoRevokeButton: Button
@@ -115,7 +117,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             localNetwork = localNetwork,
             boundAddress = {
                 if (::controllerServer.isInitialized) controllerServer.boundAddress() else null
-            }
+            },
+            allowLocalhost = BuildConfig.DEBUG
         )
         wsHub = WsHub(auth, { buildState() }, { key -> dpad(key) })
         apiRoutes = ApiRoutes(
@@ -137,7 +140,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 }
             }
         )
-        controllerServer = ControllerServer(config, localNetwork, auth, apiRoutes, wsHub) {
+        controllerServer = ControllerServer(
+            config,
+            localNetwork,
+            auth,
+            apiRoutes,
+            wsHub,
+            allowLocalhostBind = BuildConfig.DEBUG
+        ) {
             runOnIo {
                 // A fallback or retry bind may land on a different port than the
                 // one mDNS was started with; re-advertise the port actually
@@ -221,6 +231,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         infoDeviceName = findViewById(R.id.info_device_name)
         infoControllerUrl = findViewById(R.id.info_controller_url)
         infoIpUrl = findViewById(R.id.info_ip_url)
+        infoDebugUrl = findViewById(R.id.info_debug_url)
         infoPin = findViewById(R.id.info_pin)
         infoPairButton = findViewById(R.id.info_pair_button)
         infoRevokeButton = findViewById(R.id.info_revoke_button)
@@ -285,6 +296,12 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         infoDeviceName.text = config.deviceName
         infoControllerUrl.text = "Controller: http://$host:$port"
         infoIpUrl.text = "IP:         http://${info?.ip ?: "unavailable"}:$port"
+        if (BuildConfig.DEBUG) {
+            infoDebugUrl.text = "Debug (adb forward): http://localhost:$port"
+            infoDebugUrl.visibility = View.VISIBLE
+        } else {
+            infoDebugUrl.visibility = View.GONE
+        }
         infoPin.text = "Pairing PIN: ${auth.currentPin() ?: "------"}"
         infoRevokeButton.text = "Revoke all devices (${auth.pairedCount()} paired)"
     }
@@ -373,7 +390,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     private fun registerBackHandling() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val callback = OnBackInvokedCallback { handleBack() }
+            // A registered callback always consumes the back gesture, so the
+            // fall-through used on older APIs is not available here: at the
+            // root we must finish the activity ourselves.
+            val callback = OnBackInvokedCallback { if (!handleBack()) finish() }
             backCallback = callback
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT,
@@ -389,33 +409,49 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         }
     }
 
+    fun canHandleBack(): Boolean = BackOrder.canHandle(backState())
+
     fun handleBack(): Boolean {
-        if (infoOverlay.visibility == View.VISIBLE) {
-            hideInfoOverlay()
-            return true
+        return when (BackOrder.decision(backState())) {
+            BackOrder.Action.CLOSE_INFO -> {
+                hideInfoOverlay()
+                true
+            }
+            BackOrder.Action.CLOSE_ERROR -> {
+                hideErrorOverlay()
+                true
+            }
+            BackOrder.Action.HIDE_FULLSCREEN -> {
+                hideCustomView()
+                true
+            }
+            BackOrder.Action.GO_BACK -> {
+                webViewController.goBack()
+                true
+            }
+            // Back at the root: fall back to the home page before consuming the
+            // event. The comparison is normalised (HomeUrlMatcher) so a home
+            // page that redirects (trailing slash, `www.`) terminates instead of
+            // oscillating.
+            BackOrder.Action.GO_HOME -> {
+                webViewController.goHome(config.homeUrl)
+                true
+            }
+            // Nothing left to do: the kiosk stays put on the legacy path, and
+            // the caller (dispatchKeyEvent / the back callback) decides whether
+            // to exit.
+            BackOrder.Action.EXIT -> false
         }
-        if (errorOverlay.visibility == View.VISIBLE) {
-            hideErrorOverlay()
-            return true
-        }
-        if (customView != null) {
-            hideCustomView()
-            return true
-        }
-        val view = webViewController
-        if (webViewController.canGoBackOnMain()) {
-            view.goBack()
-            return true
-        }
-        // Back at the root: fall back to the home page before consuming the event.
-        // The comparison is normalised so a home page that redirects (trailing
-        // slash, `www.`) terminates instead of oscillating.
-        if (!HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl)) {
-            webViewController.goHome(config.homeUrl)
-            return true
-        }
-        return false
     }
+
+    /** Snapshot of the state the Back ladder is evaluated against. */
+    private fun backState(): BackOrder.BackState = BackOrder.BackState(
+        infoOverlayVisible = infoOverlay.visibility == View.VISIBLE,
+        errorOverlayVisible = errorOverlay.visibility == View.VISIBLE,
+        fullscreenVisible = customView != null,
+        canGoBack = webViewController.canGoBackOnMain(),
+        atHome = HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl)
+    )
 
     @Suppress("DEPRECATION")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -429,6 +465,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
             event.keyCode == KeyEvent.KEYCODE_BACK
         ) {
+            // Only consume Back when the app can actually act on it; at the true
+            // root fall through to the system so the gesture finishes the
+            // activity. DOWN and UP use the same predicate.
+            if (!canHandleBack()) return super.dispatchKeyEvent(event)
             if (event.action == KeyEvent.ACTION_UP) {
                 handleBack()
             }

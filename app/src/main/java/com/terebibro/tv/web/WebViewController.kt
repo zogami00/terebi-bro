@@ -67,6 +67,16 @@ class WebViewController(
     private var progress = 0
     private var title = ""
 
+    /**
+     * Set when [goHome] loads the home URL; the history is collapsed in
+     * [TerebiWebViewClient.onPageFinished]. Clearing right after `loadUrl`
+     * leaves the entry being loaded behind, so it must wait until the page has
+     * committed. Without this, Back at the root reloads home as a new entry:
+     * the next Back steps straight back to the previous page and the ladder
+     * oscillates, never reaching EXIT.
+     */
+    private var pendingClearHistory = false
+
     /** Creates the WebView and adds it to [container]. Must run on the UI thread. */
     fun attach(container: FrameLayout, homeUrl: String) {
         this.container = container
@@ -190,7 +200,13 @@ class WebViewController(
     } ?: false
 
     fun goHome(homeUrl: String): Boolean = dispatch {
-        webView?.loadUrl(homeUrl)
+        val view = webView
+        if (view != null) {
+            view.loadUrl(homeUrl)
+            // Collapse history once the home page commits so Back at the root
+            // can reach EXIT instead of bouncing back to the previous entry.
+            pendingClearHistory = true
+        }
         listener.onWebStateChanged()
         true
     } ?: false
@@ -334,6 +350,14 @@ class WebViewController(
             loading = false
             progress = 100
             title = view.title ?: ""
+            // Collapse the back/forward list after a goHome load so home is the
+            // only entry (see pendingClearHistory). Done here, not in goHome:
+            // clearing immediately after loadUrl does not remove the entry being
+            // loaded, which would leave the oscillation intact.
+            if (pendingClearHistory) {
+                view.clearHistory()
+                pendingClearHistory = false
+            }
             listener.onWebPageFinished(url)
             listener.onWebStateChanged()
         }

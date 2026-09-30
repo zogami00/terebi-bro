@@ -118,6 +118,56 @@ Press the remote's **MENU** (or **INFO**) button to toggle the overlay.
 **Revoke all devices** is TV-only: it is deliberately not exposed over HTTP so
 one paired phone cannot kick out the others.
 
+### Back behaviour
+
+Back walks a fixed ladder and consumes the gesture only while there is
+something to do:
+
+1. info (setup) overlay open → close it
+2. error overlay open → close it
+3. HTML5 fullscreen video → exit the video
+4. WebView has history → navigate back
+5. not on the home page → load the home page
+6. **at the true root → exit the app**
+
+At the root there is nothing left for the app to do, so Back is handed to the
+system. Both API paths run the same ladder: on **API 30–32** the activity
+consumes the key event in `dispatchKeyEvent` and falls through to the system at
+the root; on **API 33+** an `OnBackInvokedCallback` runs the ladder and finishes
+the activity itself. The `android:enableOnBackInvokedCallback="true"` attribute
+is required for that callback to be delivered on API 33–35 (on API 36 it
+defaults to true; below API 33 it is ignored).
+
+At the true root on API 30–32 the fall-through delivers the Back key to the page
+before the system sees it, so a site whose JavaScript calls `preventDefault()`
+on the Back key (some TV web apps do) could still block exit; this has not been
+verified on a device.
+
+## Testing the controller on an emulator
+
+The control server is reachable only from the TV's own LAN subnet, and an
+Android emulator is NAT'd: the host cannot reach the emulator's LAN address
+directly. A forward arrives at the device as a **loopback** connection, which
+the LAN-only policy rejects. Debug builds therefore also bind the wildcard
+address and accept loopback peers and the `localhost` / `127.0.0.1` Host forms.
+Forward the port and open the controller from the host browser:
+
+```powershell
+adb forward tcp:8765 tcp:8765
+```
+
+```text
+http://localhost:8765
+```
+
+The debug build's setup overlay also shows this URL as
+`Debug (adb forward): http://localhost:8765`.
+
+This works **only in debug builds** (`BuildConfig.DEBUG`). Release builds bind
+to the TV's LAN IPv4 address only, reject loopback peers, and accept only the
+`ip:port` and `<mdnsName>.local:port` Host forms, so the control server remains
+LAN-subnet-only in production.
+
 ## Security model (in brief)
 
 This is a LAN controller, not an internet-facing service. It speaks **cleartext
@@ -188,13 +238,14 @@ bodies and WebSocket `auth` messages are never logged.
 JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 86 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 101 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
-  limiter, the bound-port write-back rule, the Home-URL comparison used by Back
-  handling, strict JSON parsing, request-body framing rules, the mDNS name
-  sanitiser, the WebSocket frame-size cap, URL validation and subnet
-  membership).
+  limiter, the bound-port write-back rule, the Back-behaviour ladder and the
+  Home-URL comparison used by Back handling, strict JSON parsing, request-body
+  framing rules, the mDNS name sanitiser, the WebSocket frame-size cap, URL
+  validation, subnet membership, the debug-only loopback/localhost peer & Host
+  policy and the listener bind-host choice).
 - `lintDebug` runs (0 errors).
 
 Runtime behaviour — launcher visibility on a TV, immersive mode, D-pad focus,
