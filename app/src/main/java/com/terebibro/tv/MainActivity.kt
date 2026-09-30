@@ -16,6 +16,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
@@ -51,7 +52,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var webViewContainer: FrameLayout
-    private lateinit var infoOverlay: LinearLayout
+    private lateinit var infoOverlay: ScrollView
     private lateinit var errorOverlay: LinearLayout
     private lateinit var infoDeviceName: TextView
     private lateinit var infoControllerUrl: TextView
@@ -61,6 +62,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var infoPairButton: Button
     private lateinit var infoRevokeButton: Button
     private lateinit var infoStartButton: Button
+    private lateinit var infoExitButton: Button
     private lateinit var errorCountdown: TextView
     private lateinit var errorRetryButton: Button
     private lateinit var errorHomeButton: Button
@@ -83,6 +85,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     private var backCallback: OnBackInvokedCallback? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * Hold duration that turns a Back press into a deliberate exit. A long
+     * press is detected from the gesture's own DOWN->UP elapsed time rather
+     * than by counting repeats, so it also works on remotes that never send
+     * repeat events. Only consulted on API < 33 (see [BackOrder.isLongPress]
+     * and [dispatchKeyEvent]).
+     */
+    private val backLongPressMs = 700L
 
     private var customView: View? = null
     private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
@@ -236,6 +247,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         infoPairButton = findViewById(R.id.info_pair_button)
         infoRevokeButton = findViewById(R.id.info_revoke_button)
         infoStartButton = findViewById(R.id.info_start_button)
+        infoExitButton = findViewById(R.id.info_exit)
         errorCountdown = findViewById(R.id.error_countdown)
         errorRetryButton = findViewById(R.id.error_retry_button)
         errorHomeButton = findViewById(R.id.error_home_button)
@@ -257,6 +269,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             hideInfoOverlay()
             webViewController.loadOnMain(config.homeUrl)
         }
+        infoExitButton.setOnClickListener { exitApp() }
         errorRetryButton.setOnClickListener { retryNow() }
         errorHomeButton.setOnClickListener {
             hideErrorOverlay()
@@ -390,10 +403,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     private fun registerBackHandling() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // A registered callback always consumes the back gesture, so the
-            // fall-through used on older APIs is not available here: at the
-            // root we must finish the activity ourselves.
-            val callback = OnBackInvokedCallback { if (!handleBack()) finish() }
+            // On API 33+ the system is expected to route Back to this callback
+            // rather than to dispatchKeyEvent (reasoned from the platform's
+            // Back-dispatch design, not verified on a 33+ device). The code
+            // therefore does not rely on dispatchKeyEvent seeing the key here:
+            // the callback runs the same ladder (Back at the root opens the
+            // setup page), and exiting is done deliberately from the Exit App
+            // button on the setup page.
+            val callback = OnBackInvokedCallback { handleBack() }
             backCallback = callback
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT,
@@ -409,8 +426,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         }
     }
 
-    fun canHandleBack(): Boolean = BackOrder.canHandle(backState())
-
+    /**
+     * Runs the (now total) Back ladder. Every rung performs a real action, so
+     * this always consumes the press.
+     */
     fun handleBack(): Boolean {
         return when (BackOrder.decision(backState())) {
             BackOrder.Action.CLOSE_INFO -> {
@@ -429,19 +448,31 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 webViewController.goBack()
                 true
             }
-            // Back at the root: fall back to the home page before consuming the
-            // event. The comparison is normalised (HomeUrlMatcher) so a home
-            // page that redirects (trailing slash, `www.`) terminates instead of
-            // oscillating.
+            // Back not at the root: fall back to the home page. The comparison
+            // is normalised (HomeUrlMatcher) so a home page that redirects
+            // (trailing slash, `www.`) terminates instead of oscillating.
             BackOrder.Action.GO_HOME -> {
                 webViewController.goHome(config.homeUrl)
                 true
             }
-            // Nothing left to do: the kiosk stays put on the legacy path, and
-            // the caller (dispatchKeyEvent / the back callback) decides whether
-            // to exit.
-            BackOrder.Action.EXIT -> false
+            // Back at the true root: open the setup / pairing page. Exiting the
+            // kiosk is deliberate (long-press Back on API < 33, or the Exit App
+            // button on the setup page) and never a side effect of one press.
+            BackOrder.Action.SHOW_SETUP -> {
+                showInfoOverlay(issueNewPin = auth.currentPin() == null)
+                true
+            }
         }
+    }
+
+    /**
+     * Deliberate exit, shared by the long-press of Back (API < 33) and the Exit
+     * App button on the setup page. [finishAndRemoveTask] leaves Recents too so
+     * the kiosk is not relaunched from there.
+     */
+    private fun exitApp() {
+        SafeLog.i(TAG, "Exiting app")
+        finishAndRemoveTask()
     }
 
     /** Snapshot of the state the Back ladder is evaluated against. */
@@ -465,14 +496,32 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
             event.keyCode == KeyEvent.KEYCODE_BACK
         ) {
-            // Only consume Back when the app can actually act on it; at the true
-            // root fall through to the system so the gesture finishes the
-            // activity. DOWN and UP use the same predicate.
-            if (!canHandleBack()) return super.dispatchKeyEvent(event)
-            if (event.action == KeyEvent.ACTION_UP) {
-                handleBack()
+            // Back is always meaningful now (the ladder is total), so it is
+            // always consumed and never falls through to the system.
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    // Consume the press; do not act on DOWN. The hold is
+                    // measured on UP from the event's own gesture start
+                    // (event.downTime), which auto-repeat cannot shift the way
+                    // event.eventTime can.
+                    return true
+                }
+                KeyEvent.ACTION_UP -> {
+                    // A cancelled press (FLAG_CANCELED) is not a press at all:
+                    // no ladder, no exit.
+                    if (event.isCanceled) return true
+                    // Some remotes never send repeats, so the DOWN->UP elapsed
+                    // time is the hold duration. A missing/malformed gesture is
+                    // never a long press (see BackOrder.isLongPress).
+                    if (BackOrder.isLongPress(event.downTime, event.eventTime, backLongPressMs)) {
+                        exitApp()
+                    } else {
+                        handleBack()
+                    }
+                    return true
+                }
+                else -> return true
             }
-            return true
         }
         return super.dispatchKeyEvent(event)
     }

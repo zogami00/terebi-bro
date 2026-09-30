@@ -51,34 +51,72 @@ class BackOrderTest {
     }
 
     @Test
-    fun `at the root the ladder exits`() {
-        assertEquals(Action.EXIT, BackOrder.decision(state(atHome = true)))
-        assertFalse(BackOrder.canHandle(state(atHome = true)))
+    fun `at the root the ladder opens the setup page`() {
+        assertEquals(Action.SHOW_SETUP, BackOrder.decision(state(atHome = true)))
     }
 
     @Test
-    fun `every non-root rung is handled`() {
-        assertTrue(BackOrder.canHandle(state(info = true)))
-        assertTrue(BackOrder.canHandle(state(error = true)))
-        assertTrue(BackOrder.canHandle(state(fullscreen = true)))
-        assertTrue(BackOrder.canHandle(state(canGoBack = true)))
-        assertTrue(BackOrder.canHandle(state(atHome = false)))
-    }
-
-    @Test
-    fun `canHandle mirrors the decision exactly`() {
-        val states = listOf(
+    fun `every rung of the ladder is a real action`() {
+        val actions = listOf(
             state(),
             state(atHome = true),
             state(info = true),
             state(error = true),
             state(fullscreen = true),
             state(canGoBack = true),
-            state(atHome = false),
-            state(info = true, error = true, fullscreen = true, canGoBack = true, atHome = true)
+            state(atHome = false)
+        ).map { BackOrder.decision(it) }
+        // The ladder is total: no rung can be "nothing to do".
+        assertEquals(
+            setOf(
+                Action.CLOSE_INFO,
+                Action.CLOSE_ERROR,
+                Action.HIDE_FULLSCREEN,
+                Action.GO_BACK,
+                Action.GO_HOME,
+                Action.SHOW_SETUP
+            ),
+            actions.toSet()
         )
-        for (s in states) {
-            assertEquals(BackOrder.decision(s) != Action.EXIT, BackOrder.canHandle(s))
-        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Long-press timing (pure helper backing the API < 33 detection)
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `hold just under the threshold is not a long press`() {
+        assertFalse(BackOrder.isLongPress(1_000L, 1_699L, 700L))
+    }
+
+    @Test
+    fun `hold exactly at the threshold is a long press`() {
+        assertTrue(BackOrder.isLongPress(1_000L, 1_700L, 700L))
+    }
+
+    @Test
+    fun `hold just over the threshold is a long press`() {
+        assertTrue(BackOrder.isLongPress(1_000L, 1_701L, 700L))
+    }
+
+    @Test
+    fun `a press with no usable gesture start is never long`() {
+        // downTime <= 0 is the "no usable ACTION_DOWN / gesture start"
+        // sentinel; the elapsed value against it (here a huge uptime) must not
+        // be read as a hold.
+        assertFalse(BackOrder.isLongPress(0L, 100_000L, 700L))
+        assertFalse(BackOrder.isLongPress(-1L, 100_000L, 700L))
+    }
+
+    @Test
+    fun `an up before the gesture start is never long`() {
+        // A malformed / cancelled event can report an UP earlier than the
+        // gesture start; a negative delta must not read as a long press.
+        assertFalse(BackOrder.isLongPress(5_000L, 4_000L, 700L))
+    }
+
+    @Test
+    fun `zero-length hold is not a long press`() {
+        assertFalse(BackOrder.isLongPress(1_000L, 1_000L, 700L))
     }
 }

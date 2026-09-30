@@ -7,6 +7,7 @@
     <string name="pair_device">Pair device</string>
     <string name="revoke_devices">Revoke all devices</string>
     <string name="start_browser">Start Browser</string>
+    <string name="exit_app">Exit App</string>
     <string name="website_unavailable">Website unavailable</string>
     <string name="retry_now">Retry Now</string>
     <string name="home">Home</string>
