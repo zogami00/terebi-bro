@@ -78,6 +78,19 @@
                 android:textColor="#FFD166"
                 android:text="@string/pairing_pin_label" />
 
+            <!--
+              Advisory only: shown when the system WebView is old enough that
+              modern CSS renders as unstyled HTML. It never gates anything.
+            -->
+            <TextView
+                android:id="@+id/info_webview_warning"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:textSize="18sp"
+                android:textColor="#FFD166"
+                android:visibility="gone" />
+
             <Button
                 android:id="@+id/info_pair_button"
                 android:layout_width="wrap_content"

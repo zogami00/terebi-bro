@@ -22,6 +22,7 @@ object StateJson {
         obj.put("port", state.port)
         obj.put("network", state.network)
         obj.put("webViewVersion", state.webViewVersion)
+        obj.put("webViewOutdated", state.webViewOutdated)
         obj.put("appVersion", state.appVersion)
         obj.put("androidVersion", state.androidVersion)
         obj.put("sdkInt", state.sdkInt)

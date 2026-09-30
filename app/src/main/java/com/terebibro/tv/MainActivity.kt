@@ -23,6 +23,7 @@ import android.window.OnBackInvokedDispatcher
 import com.terebibro.tv.BuildConfig
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
+import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
 import com.terebibro.tv.net.LocalNetwork
 import com.terebibro.tv.server.ApiResult
@@ -59,6 +60,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var infoIpUrl: TextView
     private lateinit var infoDebugUrl: TextView
     private lateinit var infoPin: TextView
+    private lateinit var infoWebViewWarning: TextView
     private lateinit var infoPairButton: Button
     private lateinit var infoRevokeButton: Button
     private lateinit var infoStartButton: Button
@@ -244,6 +246,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         infoIpUrl = findViewById(R.id.info_ip_url)
         infoDebugUrl = findViewById(R.id.info_debug_url)
         infoPin = findViewById(R.id.info_pin)
+        infoWebViewWarning = findViewById(R.id.info_webview_warning)
         infoPairButton = findViewById(R.id.info_pair_button)
         infoRevokeButton = findViewById(R.id.info_revoke_button)
         infoStartButton = findViewById(R.id.info_start_button)
@@ -317,6 +320,17 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         }
         infoPin.text = "Pairing PIN: ${auth.currentPin() ?: "------"}"
         infoRevokeButton.text = "Revoke all devices (${auth.pairedCount()} paired)"
+
+        // Advisory: an old system WebView renders modern CSS as unstyled HTML.
+        // Shown only on a parseable version below the floor — never unknown.
+        val webViewVersion = deviceInfo.webViewInfo().version
+        val webViewMajor = WebViewSupport.majorOf(webViewVersion)
+        if (webViewMajor != null && WebViewSupport.isOutdated(webViewVersion)) {
+            infoWebViewWarning.text = getString(R.string.webview_outdated, webViewMajor)
+            infoWebViewWarning.visibility = View.VISIBLE
+        } else {
+            infoWebViewWarning.visibility = View.GONE
+        }
     }
 
     private fun showErrorOverlay() {
@@ -622,6 +636,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             port = effectiveControllerPort(),
             network = info?.network ?: "none",
             webViewVersion = "${webView.provider} ${webView.version}",
+            webViewOutdated = WebViewSupport.isOutdated(webView.version),
             appVersion = deviceInfo.appVersion,
             androidVersion = deviceInfo.androidVersion,
             sdkInt = deviceInfo.sdkInt,

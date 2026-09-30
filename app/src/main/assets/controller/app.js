@@ -288,7 +288,34 @@
       setText('infoIp', d.ip);
       setText('infoPort', d.port);
       setText('infoPaired', d.pairedCount);
+      setWebViewWarning(d.webViewOutdated, d.webViewVersion);
     });
+  }
+
+  /* The major component of the trailing token of a WebView version string
+     (e.g. "com.google.android.webview 90.0.4430.91" -> "90"). Display-only;
+     returns null when it cannot be read. */
+  function webViewMajor(version) {
+    if (!version) return null;
+    var parts = String(version).trim().split(/\s+/);
+    var match = /^(\d+)/.exec(parts[parts.length - 1] || '');
+    return match ? match[1] : null;
+  }
+
+  function setWebViewWarning(outdated, version) {
+    var el = $('webViewWarning');
+    if (!el) return;
+    if (!outdated) {
+      el.textContent = '';
+      hide(el);
+      return;
+    }
+    var major = webViewMajor(version);
+    var label = major ? ' (v' + major + ')' : '';
+    el.textContent = 'The TV\u2019s WebView is out of date' + label +
+      '. Modern websites may render incorrectly. ' +
+      'Update "Android System WebView" / update the device.';
+    show(el);
   }
 
   /* ------------------------------------------------------------------ actions */

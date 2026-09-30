@@ -19,6 +19,7 @@ data class BrowserState(
     val port: Int,
     val network: String,
     val webViewVersion: String,
+    val webViewOutdated: Boolean,
     val appVersion: String,
     val androidVersion: String,
     val sdkInt: Int,

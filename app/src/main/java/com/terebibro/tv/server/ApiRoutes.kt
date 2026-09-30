@@ -250,6 +250,7 @@ class ApiRoutes(
             "androidVersion" to snapshot.androidVersion,
             "sdkInt" to snapshot.sdkInt,
             "webViewVersion" to snapshot.webViewVersion,
+            "webViewOutdated" to snapshot.webViewOutdated,
             "ip" to snapshot.ip,
             "port" to snapshot.port,
             "pairedCount" to auth.pairedCount()

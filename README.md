@@ -97,6 +97,31 @@ navigated to the new origin after the rebind, carrying its token in the URL
 fragment (which is never sent to the server, and is moved into `localStorage`
 and stripped on arrival).
 
+## WebView version warning
+
+The TV browser renders with the device's **system WebView** (its bundled
+Chromium), which can be years out of date on a TV that has never been updated.
+The Android 11 TV emulator's System WebView, for example, is Chromium
+**90.0.4430.91** (April 2021). Modern CSS frameworks rely on features that
+landed in Chromium **100** (March 2022) — cascade layers, `:has()`,
+`color-mix()` and container queries — so on an older WebView a modern site
+silently renders as **unstyled HTML**, with no other visible symptom.
+
+Terebi Bro therefore surfaces an advisory warning when the installed WebView is
+below Chromium 100:
+
+- `GET /api/device` reports `webViewOutdated` (boolean, next to
+  `webViewVersion`), and the controller shows a visible warning in its
+  **Device** panel.
+- The TV's setup / pairing overlay shows `WebView v<major> — out of date`.
+
+The check is **advisory only** and never blocks anything: the browser loads,
+navigates and runs exactly as before with an old WebView. A version that cannot
+be parsed (missing, blank or garbage) is never treated as outdated, so an
+unknown WebView never produces a false warning. To clear it, update **Android
+System WebView** (Play Store → search *Android System WebView* → Update) or
+install the device's system update.
+
 ## Pairing flow
 
 1. On first launch the TV shows a setup overlay with:
@@ -255,7 +280,7 @@ bodies and WebSocket `auth` messages are never logged.
 JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 106 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 116 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
   limiter, the bound-port write-back rule, the Back-behaviour ladder (including
@@ -265,7 +290,8 @@ JVM unit tests:
   framing rules, the mDNS name
   sanitiser, the WebSocket frame-size cap, URL validation, subnet membership, the
   debug-only loopback/localhost peer & Host policy and the listener bind-host
-  choice).
+  choice, and the advisory WebView-version check with its unknown-input
+  safety).
 - `lintDebug` runs (0 errors).
 
 Runtime behaviour — launcher visibility on a TV, immersive mode, D-pad focus,
