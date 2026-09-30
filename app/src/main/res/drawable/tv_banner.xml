@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <!-- Background -->
+    <path
+        android:fillColor="#0B0F1A"
+        android:pathData="M0,0 H320 V180 H0 Z" />
+
+    <!-- Screen body -->
+    <path
+        android:fillColor="#1B2440"
+        android:pathData="M60,50 H260 V130 H60 Z" />
+
+    <!-- Screen inner -->
+    <path
+        android:fillColor="#5E5CE6"
+        android:pathData="M70,60 H250 V120 H70 Z" />
+
+    <!-- Play triangle -->
+    <path
+        android:fillColor="#0B0F1A"
+        android:pathData="M146,74 L186,90 L146,106 Z" />
+
+    <!-- Stand -->
+    <path
+        android:fillColor="#1B2440"
+        android:pathData="M130,130 H190 V140 H130 Z" />
+
+</vector>

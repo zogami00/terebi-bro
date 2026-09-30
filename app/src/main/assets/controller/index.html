@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<title>Terebi Bro controller</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Terebi Bro</h1>
+  <div class="statusline">
+    <span id="statusDot" class="dot offline"></span>
+    <span id="statusText">Offline</span>
+    <span id="statusDevice" class="muted"></span>
+  </div>
+</header>
+
+<div id="errorBanner" class="banner hidden"></div>
+
+<!-- Pairing -->
+<section id="pairingScreen" class="card hidden">
+  <h2>Pair this device</h2>
+  <p class="muted">Enter the pairing PIN shown on the TV.</p>
+  <label for="pairPin">PIN</label>
+  <input id="pairPin" type="tel" inputmode="numeric" maxlength="6" autocomplete="off">
+  <label for="pairName">Device name</label>
+  <input id="pairName" type="text" maxlength="40" autocomplete="off">
+  <button id="pairButton" class="primary">Pair</button>
+  <p id="pairError" class="error"></p>
+</section>
+
+<!-- Main -->
+<main id="mainScreen" class="hidden">
+
+  <section class="card">
+    <h2>Status</h2>
+    <dl class="status-grid">
+      <dt>Current URL</dt><dd id="currentUrl" class="break"></dd>
+      <dt>Title</dt><dd id="currentTitle" class="break"></dd>
+      <dt>Loading</dt><dd id="loadingText">no</dd>
+      <dt>Network</dt><dd id="networkText">unknown</dd>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>Open URL</h2>
+    <label for="urlInput">URL</label>
+    <input id="urlInput" type="text" inputmode="url" autocomplete="off" placeholder="https://example.com">
+    <div class="row">
+      <button id="openButton" class="primary">Open</button>
+      <button id="openHomeButton">Open + Set Home</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Navigation</h2>
+    <div class="row wrap">
+      <button id="navBack">Back</button>
+      <button id="navForward">Forward</button>
+      <button id="navHome">Home</button>
+      <button id="navReload">Reload</button>
+      <button id="navStop">Stop</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Remote</h2>
+    <div class="dpad">
+      <button id="dpadUp" class="dpad-btn up">&#8593;</button>
+      <button id="dpadLeft" class="dpad-btn left">&#8592;</button>
+      <button id="dpadOk" class="dpad-btn ok primary">OK</button>
+      <button id="dpadRight" class="dpad-btn right">&#8594;</button>
+      <button id="dpadDown" class="dpad-btn down">&#8595;</button>
+    </div>
+    <div class="row">
+      <button id="dpadBack">BACK</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Browser</h2>
+    <div class="row wrap">
+      <button id="restartWebview">Restart WebView</button>
+      <button id="clearCache">Clear Cache</button>
+      <button id="clearSiteData">Clear Site Data</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <label for="homeUrlInput">Home URL</label>
+    <div class="row">
+      <input id="homeUrlInput" type="text" inputmode="url" class="grow" autocomplete="off">
+      <button id="saveHomeUrl">Save</button>
+    </div>
+
+    <label for="deviceNameInput">Device Name</label>
+    <div class="row">
+      <input id="deviceNameInput" type="text" maxlength="40" class="grow" autocomplete="off">
+      <button id="saveDeviceName">Save</button>
+    </div>
+
+    <label for="portInput">Controller Port</label>
+    <div class="row">
+      <input id="portInput" type="number" min="1024" max="65535" class="grow" autocomplete="off">
+      <button id="savePort">Save</button>
+    </div>
+
+    <label class="check"><input id="fullscreenToggle" type="checkbox"> Fullscreen</label>
+    <label class="check"><input id="keepAwakeToggle" type="checkbox"> Keep Screen Awake</label>
+  </section>
+
+  <section class="card">
+    <h2>Device</h2>
+    <p id="webViewWarning" class="warn hidden"></p>
+    <dl class="status-grid">
+      <dt>Device Name</dt><dd id="infoDeviceName"></dd>
+      <dt>App Version</dt><dd id="infoAppVersion"></dd>
+      <dt>Android Version</dt><dd id="infoAndroidVersion"></dd>
+      <dt>SDK</dt><dd id="infoSdk"></dd>
+      <dt>WebView</dt><dd id="infoWebView" class="break"></dd>
+      <dt>IP</dt><dd id="infoIp"></dd>
+      <dt>Port</dt><dd id="infoPort"></dd>
+      <dt>Paired devices</dt><dd id="infoPaired"></dd>
+    </dl>
+    <div class="row">
+      <button id="unpairButton" class="danger">Unpair this device</button>
+    </div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
