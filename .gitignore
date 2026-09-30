@@ -6,6 +6,11 @@ local.properties
 *.apk
 *.aab
 
+# Signing material — must never be committed
+*.jks
+*.keystore
+*.p12
+
 # IDE
 .idea/
 *.iml
