@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Terebi Bro</string>
+    <string name="controller_label">Controller:</string>
+    <string name="ip_label">IP:</string>
+    <string name="pairing_pin_label">Pairing PIN:</string>
+    <string name="pair_device">Pair device</string>
+    <string name="revoke_devices">Revoke all devices</string>
+    <string name="start_browser">Start Browser</string>
+    <string name="website_unavailable">Website unavailable</string>
+    <string name="retry_now">Retry Now</string>
+    <string name="home">Home</string>
+</resources>
