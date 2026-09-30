@@ -21,6 +21,70 @@ LAN opens the bundled controller page and drives the TV browser.
 - Automatic retry screen when the page is unavailable.
 - WebView renderer crash recovery.
 
+## Download and install
+
+**Download the latest release APK:**
+
+> **<https://github.com/zogami00/terebi-bro/releases/latest>**
+
+The asset is named **`app-release.apk`**.
+
+Install or upgrade it from a machine with `adb`, on the same network and with the
+TV reachable over ADB:
+
+```powershell
+adb install -r app-release.apk
+```
+
+The release APK is signed with a **dedicated release key**, which is different
+from the key Android uses for local debug builds. Android refuses to replace an
+installed app with one signed by a different key, so if a **debug** build of
+Terebi Bro is already installed, uninstall it first:
+
+```powershell
+adb uninstall com.terebibro.tv
+```
+
+Upgrades from one release APK to a newer release APK work normally (`-r`).
+
+## Building a signed release APK yourself
+
+With the SDK and signing properties in place (see
+[Build prerequisites](#build-prerequisites) and
+[Release signing](#release-signing)):
+
+```powershell
+.\gradlew.bat assembleRelease
+```
+
+The signed APK is written to:
+
+```text
+app\build\outputs\apk\release\app-release.apk
+```
+
+## Release signing
+
+The release APK is signed with a dedicated keystore that lives **outside this
+repository** (default location
+`%USERPROFILE%\.android\terebi-bro\terebi-bro-release.jks`). It is never
+committed; `.gitignore` also blocks `*.jks`, `*.keystore` and `*.p12`, and the
+signing secrets are held in `local.properties` (gitignored) or injected through
+environment variables (`TEREBI_STORE_FILE`, `TEREBI_STORE_PASSWORD`,
+`TEREBI_KEY_ALIAS`, `TEREBI_KEY_PASSWORD`).
+
+If any of those four values is missing, the release build still configures and
+succeeds but produces an **unsigned** APK
+(`app-release-unsigned.apk`), so a fresh clone never breaks.
+
+> **Back up the keystore and its password.** Losing them means no further
+> updates can be installed over existing copies: Android only accepts an update
+> signed with the same key. Keep a copy somewhere safe and offline — for a
+> personal project, losing the release key is effectively losing the app on
+> every TV it is installed on.
+
+No secret value belongs in this README or anywhere else in the repository.
+
 ## Build prerequisites
 
 - **JDK 21** (Temurin 21 recommended). The build targets Java/Kotlin bytecode 17
