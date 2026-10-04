@@ -101,11 +101,23 @@ never blocks the browser.
 ## Verification
 
 Compiled, JVM-unit-tested (`116` tests), linted (`0` errors) and built as a
-signed release. The debug APK was additionally installed and launched on a real
-Android 9 (API 28) device: the setup overlay renders, the embedded control
-server binds, mDNS advertises, and the legacy immersive fallback is
-demonstrably applied (`dumpsys window` reports the activity window's
-`mSystemUiVisibility=0x1706`, the pre-API-30 flag set). The browser page flow
-against a real Home URL, D-pad behaviour, controller pairing and
-WebSocket/mDNS reachability over a real LAN, and API 30+ runtime behaviour
-remain implemented but **not verified at runtime**.
+signed release.
+
+**Verified end-to-end by the maintainer on the reference Android 9 (API 28)
+device using the shipped `v0.2.0` release APK**, installed from the published
+GitHub release: the Back ladder, long-press Back exit, the Exit App button,
+D-pad focus traversal inside a real site, controller pairing from a second
+device with the 6-digit PIN, live WebSocket status updates, rendering of a real
+Home URL (Chromium 138), the controller's on-screen D-pad driving TV focus, the
+browser management actions (Restart WebView, Clear Cache, Clear Site Data), and
+reachability of the controller over its `<device-name>.local` mDNS address. The
+release APK installs, launches, binds the control server, advertises mDNS,
+applies the legacy immersive fallback (`dumpsys window` reports the activity
+window's `mSystemUiVisibility=0x1706`, the pre-API-30 flag set), and enforces
+its release-only network policy (loopback refused, LAN served).
+
+What this does not cover: there is **no CI and no automated device test suite**,
+and this is a maintainer-run pass on **one API 28 unit**, not exhaustive
+coverage. **API 30+ behaviour has been exercised only on an emulator (Android
+14 / API 34), not on physical hardware**; Android 11+ real hardware remains
+unverified.
