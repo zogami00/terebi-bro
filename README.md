@@ -280,9 +280,10 @@ The `android:enableOnBackInvokedCallback="true"` attribute is required for the
 callback to be delivered on API 33–35 (on API 36 it defaults to true; below
 API 33 it is ignored).
 
-`700 ms` is a reasoned default for the long-press threshold, not a value measured
-on hardware, and the Back ladder and the hold timing have not been verified on a
-device or emulator (see [Verification status](#verification-status)).
+`700 ms` is a reasoned default for the long-press threshold rather than a value
+measured on hardware, though the Back ladder and the hold-to-exit behaviour were
+verified end-to-end by the maintainer on the reference Android 9 device (see
+[Verification status](#verification-status)).
 
 ## Testing the controller on an emulator
 
@@ -375,8 +376,7 @@ bodies and WebSocket `auth` messages are never logged.
 
 ## Verification status
 
-Validated by building, by JVM unit tests, and by an install/launch on a real
-Android 9 (API 28) device:
+Validated by building and by JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
 - `testDebugUnitTest` passes: 116 JVM tests (PIN/token/auth logic, token registry
@@ -394,21 +394,38 @@ Android 9 (API 28) device:
 - `lintDebug` runs (0 errors, `NewApi`-clean after lowering `minSdk`).
 - `assembleRelease` builds and produces a signed `app-release.apk`.
 
-**Partially verified on a device (Android 9 / API 28).** The debug APK was
-installed and launched on a real Android 9 (API 28) device:
+**Verified end-to-end by the maintainer on the reference Android 9 (API 28)
+device, using the shipped `v0.2.0` release build installed from the published
+GitHub release.** Every path below passed:
 
-- `adb install -r app-debug.apk` **succeeds**; the same APK built with
-  `minSdk = 30` was rejected with `INSTALL_FAILED_OLDER_SDK`.
-- The activity displays, the setup / pairing overlay renders, the embedded
-  control server binds, and mDNS advertises.
-- The legacy immersive fallback is applied: `dumpsys window` reports the
-  activity window's `mSystemUiVisibility=0x1706`, exactly the pre-API-30 flag
-  set the fallback assigns (`LAYOUT_STABLE | LAYOUT_HIDE_NAVIGATION |
-  LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN | IMMERSIVE_STICKY`).
-- The advisory WebView warning fires, as expected on this hardware
-  (`WebView v66 — out of date`).
+- **Back ladder** — closes the overlays, steps through history, loads the home
+  page, and at the root opens the setup page rather than exiting.
+- **Long-press Back exit** — holding Back exits to the launcher (the
+  API ≤ 32 path).
+- **Exit App button** — exits the app.
+- **D-pad focus traversal** — the remote moves focus correctly inside a real
+  site.
+- **Controller pairing** — paired from another device using the 6-digit PIN.
+- **Live WebSocket status** — the controller panel updates without a refresh.
+- **Real page rendering** — a real Home URL renders correctly on Chromium 138.
+- **Web D-pad buttons** — the controller's on-screen D-pad drives focus on the
+  TV.
+- **Browser management actions** — Restart WebView, Clear Cache, Clear Site
+  Data.
+- **mDNS `.local` access** — the controller was reached via the
+  `<device-name>.local` address, not only the IP.
 
-The rest — an actual browser page rendered against a real Home URL, D-pad
-focus, controller pairing against a phone, WebSocket reachability over the
-LAN, and API 30+ runtime behaviour — has **not** been exercised on hardware or
-an emulator.
+Additionally, and already recorded: the release APK installs on the device,
+launches, binds the control server, advertises mDNS, applies immersive mode
+(`dumpsys window` reports the activity window's `mSystemUiVisibility=0x1706`,
+exactly the pre-API-30 flag set the fallback assigns, i.e. `LAYOUT_STABLE |
+LAYOUT_HIDE_NAVIGATION | LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN |
+IMMERSIVE_STICKY`), and enforces its release-only network policy (loopback
+refused, LAN served). The advisory WebView warning fires, as expected on this
+hardware (`WebView v66 — out of date`).
+
+What this does **not** cover: there is **no CI and no automated device test
+suite**, so this is a maintainer-run end-to-end pass on **one API 28 unit**, not
+exhaustive coverage. The **API 30+ immersive path has been exercised only on an
+emulator (Android 14 / API 34), never on physical hardware**, so Android 11+
+real-hardware behaviour remains unverified.

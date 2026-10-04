@@ -406,20 +406,32 @@ new provider, and the old provider is retained as a fallback.
 
 ## 10. Honest limitations
 
-What was actually verified on the real reference device:
+The maintainer completed a full end-to-end pass on the real reference device
+using the shipped `v0.2.0` release APK. That pass covered:
 
 - The WebView provider swap itself (the framework patch in §6–§8).
-- The app launches.
-- The embedded control server binds.
-- mDNS advertises.
-- Immersive mode is applied (the legacy `systemUiVisibility` flag path).
+- The app launching, the embedded control server binding, mDNS advertising, and
+  immersive mode being applied (the legacy `systemUiVisibility` flag path).
+- The **Back** ladder (closing the overlays, walking history, loading home, and
+  opening the setup page at the root) and the long-press Back exit.
+- **D-pad focus** traversal inside a real site, including via the controller's
+  on-screen D-pad.
+- **Controller pairing** against a second device using the 6-digit PIN, with
+  live WebSocket status updates.
+- **Real page rendering** of a real Home URL (Chromium 138).
+- Reachability over the `<device-name>.local` mDNS address.
+- The browser management actions (Restart WebView, Clear Cache, Clear Site
+  Data), the Exit App button, and the release-only network policy (loopback
+  refused, LAN served).
 
-What was **not** verified on hardware:
+What is still not covered:
 
-- **D-pad focus** behaviour.
-- **Back** behaviour.
-- **Controller pairing** against a second device.
-- **Any actual page rendering against a real Home URL.**
+- This was **one API 28 unit**; a second unit may differ.
+- **API 29 is untested** on hardware (as noted in §1).
+- **API 30+** has only been exercised on an **emulator (Android 14 / API 34)**,
+  not on physical hardware.
+- There is **no CI and no automated device test suite**; this is a
+  maintainer-run pass on one unit, not exhaustive coverage.
 
 Also note: the reference device's **router NATs between subnets**, so the app's
 local-subnet peer check is transparent on that topology — it cannot be exercised
