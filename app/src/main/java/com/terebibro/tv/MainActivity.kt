@@ -384,22 +384,55 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     // ---------------------------------------------------------------------
 
     private fun applyFullscreen(enabled: Boolean) {
-        val currentWindow = window
         if (enabled) {
             enterImmersiveMode()
         } else {
-            currentWindow.setDecorFitsSystemWindows(true)
-            currentWindow.insetsController?.show(WindowInsets.Type.systemBars())
+            showSystemUi()
         }
     }
 
+    /**
+     * Hides the system bars. On API 30+ this uses the modern window-insets
+     * controller exactly as before; on API 21-29 the legacy
+     * `systemUiVisibility` flags are the only mechanism available (the
+     * `Window`/`WindowInsetsController` API does not exist there).
+     */
+    @Suppress("DEPRECATION")
     private fun enterImmersiveMode() {
-        val currentWindow = window
-        currentWindow.setDecorFitsSystemWindows(false)
-        currentWindow.insetsController?.let { controller ->
-            controller.hide(WindowInsets.Type.systemBars())
-            controller.systemBarsBehavior =
-                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val currentWindow = window
+            currentWindow.setDecorFitsSystemWindows(false)
+            currentWindow.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.systemBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                )
+        }
+    }
+
+    /**
+     * Restores the system bars, the counterpart of [enterImmersiveMode]. On
+     * API 30+ this is the `setDecorFitsSystemWindows(true)` +
+     * `insetsController.show(...)` pair; below API 30 clearing the legacy
+     * flags removes the immersive layout flags.
+     */
+    @Suppress("DEPRECATION")
+    private fun showSystemUi() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val currentWindow = window
+            currentWindow.setDecorFitsSystemWindows(true)
+            currentWindow.insetsController?.show(WindowInsets.Type.systemBars())
+        } else {
+            window.decorView.systemUiVisibility = 0
         }
     }
 

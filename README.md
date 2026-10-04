@@ -10,7 +10,9 @@ LAN opens the bundled controller page and drives the TV browser.
 
 ## What it does
 
-- Fullscreen immersive browser on Android TV (Android 11 / API 30+).
+- Fullscreen immersive browser on Android TV (spec target Android 11 / API 30+;
+  API 28–29 is supported as a compatibility fallback — see
+  [Supported Android versions](#supported-android-versions)).
 - Persistent configurable Home URL, keep-screen-awake and fullscreen settings.
 - Embedded control server on a configurable port (default **8765**).
 - Bundled, responsive web controller (no CDN, no external assets).
@@ -20,6 +22,29 @@ LAN opens the bundled controller page and drives the TV browser.
 - mDNS advertisement as `<deviceName>.local`, with an IP fallback.
 - Automatic retry screen when the page is unavailable.
 - WebView renderer crash recovery.
+
+## Supported Android versions
+
+The specification targets **Android 11 or newer (API 30)**
+(`docs/implementation-plan.md` §3). Terebi Bro is built with `minSdk = 28`
+and also runs on **Android 9 (API 28)** and **Android 10 (API 29)** as a
+deliberate compatibility fallback for older TV hardware. This is a documented
+deviation from the spec's Android 11 minimum (see `docs/v1-scope.md`).
+
+What the fallback costs on an API 28–29 device:
+
+- **Legacy immersive fullscreen.** Below API 30 there is no
+  `WindowInsetsController`, so the app hides and shows the system bars with
+  the pre-API-30 `decorView.systemUiVisibility` flags instead. The on-screen
+  result is the same fullscreen picture, but it is the older, less capable
+  mechanism. API 30+ behaviour is unchanged.
+- **Old WebView.** These devices almost always ship an **Android System
+  WebView** far older than Chromium 100, so modern CSS can render as unstyled
+  HTML. The app's WebView version warning then fires on the TV overlay and in
+  the controller — that is correct and never blocks anything (see
+  [WebView version warning](#webview-version-warning)).
+
+`compileSdk` and `targetSdk` remain 36; only `minSdk` was lowered.
 
 ## Download and install
 
@@ -109,7 +134,7 @@ Toolchain versions used for this build:
 | Gradle | 8.13 |
 | Android Gradle Plugin | 8.13.2 |
 | Kotlin | 2.1.21 |
-| compileSdk / targetSdk / minSdk | 36 / 36 / 30 |
+| compileSdk / targetSdk / minSdk | 36 / 36 / 28 |
 
 ## Build and test
 
@@ -340,8 +365,8 @@ bodies and WebSocket `auth` messages are never logged.
 
 ## Verification status
 
-**Not verified on a device.** The project was validated only by building and by
-JVM unit tests:
+Validated by building, by JVM unit tests, and by an install/launch on a real
+Android 9 (API 28) device:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
 - `testDebugUnitTest` passes: 116 JVM tests (PIN/token/auth logic, token registry
@@ -356,8 +381,24 @@ JVM unit tests:
   debug-only loopback/localhost peer & Host policy and the listener bind-host
   choice, and the advisory WebView-version check with its unknown-input
   safety).
-- `lintDebug` runs (0 errors).
+- `lintDebug` runs (0 errors, `NewApi`-clean after lowering `minSdk`).
+- `assembleRelease` builds and produces a signed `app-release.apk`.
 
-Runtime behaviour — launcher visibility on a TV, immersive mode, D-pad focus,
-WebSocket reachability, mDNS resolution, pairing against a real phone — has
-**not** been exercised on hardware or an emulator, because none was available.
+**Partially verified on a device (Android 9 / API 28).** The debug APK was
+installed and launched on a real Android 9 (API 28) device:
+
+- `adb install -r app-debug.apk` **succeeds**; the same APK built with
+  `minSdk = 30` was rejected with `INSTALL_FAILED_OLDER_SDK`.
+- The activity displays, the setup / pairing overlay renders, the embedded
+  control server binds, and mDNS advertises.
+- The legacy immersive fallback is applied: `dumpsys window` reports the
+  activity window's `mSystemUiVisibility=0x1706`, exactly the pre-API-30 flag
+  set the fallback assigns (`LAYOUT_STABLE | LAYOUT_HIDE_NAVIGATION |
+  LAYOUT_FULLSCREEN | HIDE_NAVIGATION | FULLSCREEN | IMMERSIVE_STICKY`).
+- The advisory WebView warning fires, as expected on this hardware
+  (`WebView v66 — out of date`).
+
+The rest — an actual browser page rendered against a real Home URL, D-pad
+focus, controller pairing against a phone, WebSocket reachability over the
+LAN, and API 30+ runtime behaviour — has **not** been exercised on hardware or
+an emulator.
