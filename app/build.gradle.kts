@@ -50,10 +50,13 @@ android {
 
     defaultConfig {
         applicationId = "com.terebibro.tv"
-        minSdk = 30
+        // Spec minimum is API 30 (Android 11). API 28 (Android 9) is supported
+        // as a compatibility fallback for older TV hardware; the immersive
+        // path falls back to the legacy systemUiVisibility flags below API 30.
+        minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
     }
 
     signingConfigs {

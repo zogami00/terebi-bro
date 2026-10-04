@@ -6,7 +6,10 @@ What the first release ships, and what was intentionally left out.
 
 **Browser**
 
-- Android 11+ (API 30), fullscreen immersive WebView using the system provider.
+- **Android 11+ (API 30) is the spec target**; the app also supports
+  **Android 9 / 10 (API 28–29)** as a deliberate compatibility fallback (see
+  [Deviation: minimum Android version](#deviation-minimum-android-version)).
+- Fullscreen immersive WebView using the system provider.
 - Persistent, configurable Home URL.
 - JavaScript, DOM storage, cookies; audio/video; HTML5 fullscreen video
   (custom view swapped into the root container).
@@ -57,6 +60,27 @@ What the first release ships, and what was intentionally left out.
 - Device diagnostics (manufacturer, model, Android/SDK, app version, WebView
   provider/version, IP, port, uptime) on the TV and via `/api/device`.
 
+## Deviation: minimum Android version
+
+The spec (`docs/implementation-plan.md` §3) sets **Android 11 / API 30** as the
+minimum, with a recommended `minSdk = 30`. V1 ships `minSdk = 28` instead so it
+can be installed on older TV hardware (Android 9 / API 28) that cannot be
+upgraded to Android 11. The `INSTALL_FAILED_OLDER_SDK` rejection of a
+`minSdk = 30` APK on an API 28 device is the concrete reason for the change.
+
+The only source change this required is the immersive-fullscreen path. API 30
+introduced `Window.setDecorFitsSystemWindows` and `WindowInsetsController`,
+which do not exist below API 30, so the hide/show logic is gated on
+`Build.VERSION.SDK_INT >= Build.VERSION_CODES.R`. On API 28–29 it uses the
+legacy `decorView.systemUiVisibility` flags (the only mechanism available
+there). API 30+ behaviour is byte-for-byte unchanged; `compileSdk` and
+`targetSdk` remain 36.
+
+The practical cost on an API 28–29 device: its system WebView is almost
+certainly older than Chromium 100, so modern CSS may render as unstyled HTML.
+The advisory WebView warning fires on such a device — that is intended, and it
+never blocks the browser.
+
 ## Deliberately deferred
 
 - **Native long-press-Back menu (§15)** and **Enter URL from TV (§16).** The
@@ -76,6 +100,12 @@ What the first release ships, and what was intentionally left out.
 
 ## Verification
 
-Compiled and JVM-unit-tested only. No device or emulator was available, so
-launcher visibility, immersive mode, D-pad behaviour, WebSocket reachability and
-mDNS resolution are implemented but **not verified at runtime**.
+Compiled, JVM-unit-tested (`116` tests), linted (`0` errors) and built as a
+signed release. The debug APK was additionally installed and launched on a real
+Android 9 (API 28) device: the setup overlay renders, the embedded control
+server binds, mDNS advertises, and the legacy immersive fallback is
+demonstrably applied (`dumpsys window` reports the activity window's
+`mSystemUiVisibility=0x1706`, the pre-API-30 flag set). The browser page flow
+against a real Home URL, D-pad behaviour, controller pairing and
+WebSocket/mDNS reachability over a real LAN, and API 30+ runtime behaviour
+remain implemented but **not verified at runtime**.
