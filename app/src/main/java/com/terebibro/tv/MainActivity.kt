@@ -393,7 +393,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     /**
      * Hides the system bars. On API 30+ this uses the modern window-insets
-     * controller exactly as before; on API 21-29 the legacy
+     * controller exactly as before; on API 28-29 the legacy
      * `systemUiVisibility` flags are the only mechanism available (the
      * `Window`/`WindowInsetsController` API does not exist there).
      */

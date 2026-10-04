@@ -46,6 +46,16 @@ What the fallback costs on an API 28–29 device:
 
 `compileSdk` and `targetSdk` remain 36; only `minSdk` was lowered.
 
+### Legacy Android support
+
+API 28 (Android 9) and API 29 (Android 10) are a **documented compatibility
+fallback**, not the target: the app is specified for Android 11+ (API 30), and
+`minSdk = 28` is a deliberate, documented deviation. On these older devices the
+system WebView — not the app — is almost always the limiting factor. See
+[`docs/legacy-android-9-support.md`](docs/legacy-android-9-support.md) for the
+full runbook: diagnosing an old WebView and, where the ROM allows it,
+whitelisting a newer provider.
+
 ## Download and install
 
 **Download the latest release APK:**

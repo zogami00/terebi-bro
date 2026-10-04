@@ -71,7 +71,7 @@ upgraded to Android 11. The `INSTALL_FAILED_OLDER_SDK` rejection of a
 The only source change this required is the immersive-fullscreen path. API 30
 introduced `Window.setDecorFitsSystemWindows` and `WindowInsetsController`,
 which do not exist below API 30, so the hide/show logic is gated on
-`Build.VERSION.SDK_INT >= Build.VERSION_CODES.R`. On API 21–29 it uses the
+`Build.VERSION.SDK_INT >= Build.VERSION_CODES.R`. On API 28–29 it uses the
 legacy `decorView.systemUiVisibility` flags (the only mechanism available
 there). API 30+ behaviour is byte-for-byte unchanged; `compileSdk` and
 `targetSdk` remain 36.
