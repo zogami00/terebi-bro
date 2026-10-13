@@ -3,6 +3,7 @@ package com.terebibro.tv.mqtt
 import com.terebibro.tv.server.Json
 import com.terebibro.tv.web.BrowserState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 
@@ -33,9 +34,16 @@ class MqttStatusPayloadTest {
     )
 
     /** Parses the payload with the repository's strict JSON reader. */
-    private fun payload(state: BrowserState): Map<String, Json.Value> =
+    private fun payload(
+        state: BrowserState,
+        discoveryTopics: Int = 0,
+        discoveryError: String? = null
+    ): Map<String, Json.Value> =
         Json.parseObject(
-            ByteArrayInputStream(MqttStatusPayload.build(state).toByteArray(Charsets.UTF_8)),
+            ByteArrayInputStream(
+                MqttStatusPayload.build(state, discoveryTopics, discoveryError)
+                    .toByteArray(Charsets.UTF_8)
+            ),
             STATE_KEYS,
             arrayKeys = setOf("extraNetworks")
         )
@@ -56,6 +64,32 @@ class MqttStatusPayloadTest {
     }
 
     @Test
+    fun `the status payload reports the discovery result`() {
+        val values = payload(state, discoveryTopics = 21, discoveryError = null)
+
+        assertEquals(21.0, (values["discoveryTopics"] as Json.Value.Num).value, 0.0)
+        // A healthy pass serialises the error as JSON null, not a missing key.
+        assertEquals(Json.Value.Null, values["discoveryError"])
+    }
+
+    @Test
+    fun `the status payload carries a discovery failure reason when present`() {
+        val values = payload(state, discoveryTopics = 9, discoveryError = "MqttException: boom")
+
+        assertEquals(9.0, (values["discoveryTopics"] as Json.Value.Num).value, 0.0)
+        assertEquals(
+            "MqttException: boom",
+            (values["discoveryError"] as Json.Value.Str).value
+        )
+    }
+
+    @Test
+    fun `the status payload carries a status publish failure when present`() {
+        val text = MqttStatusPayload.build(state, 21, null, "MqttException: max inflight")
+        assertTrue(text.contains("\"statusError\":\"MqttException"))
+    }
+
+    @Test
     fun `the status payload is the shared browser state, not a second shape`() {
         val values = payload(state)
 
@@ -73,7 +107,7 @@ class MqttStatusPayloadTest {
     fun `no secret can appear in the payload`() {
         // The status payload is built only from BrowserState, which carries no
         // credentials; assert the serialised form has none of the secret keys.
-        val text = MqttStatusPayload.build(state)
+        val text = MqttStatusPayload.build(state, 0, null)
         assertEquals(false, text.contains("password"))
         assertEquals(false, text.contains("token"))
         assertEquals(false, text.contains("pin"))
@@ -85,7 +119,8 @@ class MqttStatusPayloadTest {
             "url", "title", "loading", "progress", "canGoBack", "canGoForward",
             "homeUrl", "fullscreen", "keepAwake", "deviceName", "ip", "port",
             "network", "webViewVersion", "webViewOutdated", "appVersion",
-            "androidVersion", "sdkInt", "uptimeMs", "seq", "extraNetworks"
+            "androidVersion", "sdkInt", "uptimeMs", "seq", "extraNetworks",
+            "discoveryTopics", "discoveryError", "statusError"
         )
     }
 }

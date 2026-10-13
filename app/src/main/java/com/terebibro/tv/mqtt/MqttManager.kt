@@ -7,6 +7,7 @@ import org.eclipse.paho.client.mqttv3.IMqttActionListener
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken
 import org.eclipse.paho.client.mqttv3.IMqttToken
 import org.eclipse.paho.client.mqttv3.MqttAsyncClient
+import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
@@ -54,6 +55,43 @@ class MqttManager(
     private val lastDiscoveryPrefixStore: (String) -> Unit = {}
 ) {
 
+    /**
+     * How the underlying Paho client is created. The default builds a real
+     * [MqttAsyncClient]; a test can inject a stub through the internal
+     * constructor below to drive the real connect/publish paths and reproduce
+     * Paho's failure modes (e.g. `REASON_CODE_MAX_INFLIGHT`).
+     */
+    private var clientFactory: (serverUri: String, clientId: String) -> MqttClientHandle =
+        { uri, id -> PahoClientHandle(MqttAsyncClient(uri, id, MemoryPersistence())) }
+
+    /**
+     * Test-only constructor: identical to the primary one but with the client
+     * factory injected. Kept `internal` so the Paho client seam does not become
+     * part of the public API.
+     */
+    internal constructor(
+        settingsProvider: () -> MqttSettings,
+        clientIdProvider: () -> String,
+        dispatcher: Dispatcher,
+        stateProvider: () -> BrowserState?,
+        deviceIdProvider: () -> String,
+        onStatusChanged: () -> Unit,
+        lastDiscoveryPrefixProvider: () -> String?,
+        lastDiscoveryPrefixStore: (String) -> Unit,
+        clientFactory: (String, String) -> MqttClientHandle
+    ) : this(
+        settingsProvider,
+        clientIdProvider,
+        dispatcher,
+        stateProvider,
+        deviceIdProvider,
+        onStatusChanged,
+        lastDiscoveryPrefixProvider,
+        lastDiscoveryPrefixStore
+    ) {
+        this.clientFactory = clientFactory
+    }
+
     /** Dispatches a parsed command; the implementation must hop to the UI thread itself. */
     interface Dispatcher {
         fun dispatch(command: MqttCommand): ApiResult
@@ -68,8 +106,37 @@ class MqttManager(
     @Volatile
     private var lastError: String? = null
 
+    /** Discovery topics successfully published by the last [publishDiscovery] attempt. */
     @Volatile
-    private var client: MqttAsyncClient? = null
+    private var discoveryTopics = 0
+
+    /** Last discovery publish failure, already redacted; null when the last attempt succeeded. */
+    @Volatile
+    private var discoveryError: String? = null
+
+    /**
+     * Last retained `status` publish failure, already redacted; null when the
+     * last attempt succeeded. Recorded the same way as [discoveryError] so a
+     * status publish blocked by Paho (e.g. a full in-flight window) is visible
+     * rather than silently dropped.
+     */
+    @Volatile
+    private var statusError: String? = null
+
+    /**
+     * Last retained `availability` publish failure, already redacted; null when
+     * the last availability publish succeeded. Availability is a separate
+     * retained topic, so it is tracked apart from [statusError]: a later
+     * successful status publish must not erase it, or Home Assistant would keep
+     * showing the device offline with nothing to explain it. It is surfaced
+     * through the existing [statusError] slot on [status] and on the retained
+     * status payload.
+     */
+    @Volatile
+    private var availabilityError: String? = null
+
+    @Volatile
+    private var client: MqttClientHandle? = null
 
     @Volatile
     private var stopped = false
@@ -90,7 +157,17 @@ class MqttManager(
         Thread(runnable, "terebi-mqtt").apply { isDaemon = true }
     }
 
-    fun status(): MqttStatus = MqttStatus(connected, state, lastError)
+    fun status(): MqttStatus =
+        MqttStatus(connected, state, lastError, discoveryTopics, discoveryError, reportedPublishError())
+
+    /**
+     * The redacted retained-publish failure to report, if any: the last `status`
+     * publish failure, or failing that the last `availability` publish failure.
+     * Both are retained publishes whose failure leaves the broker (and Home
+     * Assistant) with no explanation, so they share the one existing
+     * [MqttStatus.statusError] channel rather than a new one.
+     */
+    private fun reportedPublishError(): String? = statusError ?: availabilityError
 
     // ---------------------------------------------------------------------
     // Lifecycle
@@ -162,7 +239,7 @@ class MqttManager(
         }
         teardownClient()
         try {
-            val cli = MqttAsyncClient(serverUri(settings), clientIdProvider(), MemoryPersistence())
+            val cli = clientFactory(serverUri(settings), clientIdProvider())
             // Bind the callback to the exact client instance: a callback from a
             // client that settings changes have already replaced must not touch
             // the shared state (see teardownClient).
@@ -176,6 +253,13 @@ class MqttManager(
                 isCleanSession = true
                 connectionTimeout = CONNECT_TIMEOUT_SEC
                 keepAliveInterval = KEEP_ALIVE_SEC
+                // Paho's default window is 10 QoS-1 messages in flight. One
+                // availability, the status and 21 discovery configs (plus
+                // command results) share it, so the default silently refuses
+                // every publish past the tenth with REASON_CODE_MAX_INFLIGHT.
+                // Raise it well above the entity count so a connect-time burst
+                // always fits.
+                maxInflight = MAX_INFLIGHT
                 if (settings.username.isNotEmpty()) {
                     userName = settings.username
                     password = settings.password.toCharArray()
@@ -286,11 +370,20 @@ class MqttManager(
         try {
             cli.publish(
                 MqttTopics.status(settings.baseTopic),
-                MqttStatusPayload.build(snapshot).toByteArray(Charsets.UTF_8),
+                MqttStatusPayload.build(snapshot, discoveryTopics, discoveryError, reportedPublishError())
+                    .toByteArray(Charsets.UTF_8),
                 QOS,
                 true
             )
-        } catch (e: MqttException) {
+            // A delivered status means the previous failure (if any) has now
+            // been surfaced to the broker, so the recorded error is cleared.
+            statusError = null
+        } catch (t: Throwable) {
+            // A status publish failure must be observable: record it exactly
+            // as a discovery failure is recorded rather than swallowing it.
+            // Catch Throwable, not just MqttException, so a runtime failure
+            // cannot silently drop the retained status.
+            statusError = safeFailureReason(t)
             SafeLog.w(TAG, "MQTT status publish failed")
         }
     }
@@ -314,6 +407,12 @@ class MqttManager(
      * [MqttDiscovery.entities] result so they cannot drift.
      */
     private fun publishDiscovery() {
+        // A new attempt starts from a clean slate. If anything below aborts
+        // before the counters are assigned — the `?: return` below, or a throw
+        // caught by the caller's task — the status must not keep the previous
+        // connect's discoveryTopics alongside this attempt's error.
+        discoveryTopics = 0
+        discoveryError = null
         val settings = settingsProvider()
         val snapshot = stateProvider() ?: return
         val deviceId = deviceIdProvider()
@@ -323,21 +422,44 @@ class MqttManager(
             appVersion = snapshot.appVersion,
             base = settings.baseTopic
         )
-        for (topic in MqttDiscovery.staleConfigTopics(
-            previousPrefix = lastDiscoveryPrefixProvider(),
-            currentPrefix = settings.discoveryPrefix,
-            deviceId = deviceId,
-            entities = entities
-        )) {
-            publishRetained(topic, "")
+        // Clear configs left under a previous prefix. Failures are isolated so
+        // one bad topic cannot abort the loop (or the main publish loop below).
+        val cleared = runIsolated(
+            MqttDiscovery.staleConfigTopics(
+                previousPrefix = lastDiscoveryPrefixProvider(),
+                currentPrefix = settings.discoveryPrefix,
+                deviceId = deviceId,
+                entities = entities
+            )
+        ) { topic -> tryPublishRetained(topic, "") }
+
+        // Publish (or clear) every config independently: one entity that throws
+        // must never cost the ones after it. An enabled device publishes its
+        // config; a disabled one clears it with an empty retained payload.
+        val published = runIsolated(entities) { entity ->
+            tryPublishRetained(
+                MqttDiscovery.topic(settings.discoveryPrefix, deviceId, entity),
+                if (settings.discoveryEnabled) entity.config.toString() else ""
+            )
         }
-        for (entity in entities) {
-            val topic = MqttDiscovery.topic(settings.discoveryPrefix, deviceId, entity)
-            // An enabled device publishes its config; a disabled one clears it
-            // with an empty retained payload.
-            publishRetained(topic, if (settings.discoveryEnabled) entity.config.toString() else "")
+
+        discoveryTopics = published.succeeded
+        discoveryError = published.lastError ?: cleared.lastError
+        if (published.failed > 0 || cleared.failed > 0) {
+            SafeLog.w(
+                TAG,
+                "MQTT discovery publish incomplete: " +
+                    "${published.succeeded}/${entities.size} entities, " +
+                    "${published.failed} failed, ${cleared.failed} stale clears failed"
+            )
         }
-        lastDiscoveryPrefixStore(settings.discoveryPrefix)
+        // Only persist the new prefix when every stale clear succeeded. If any
+        // clear failed, the previous prefix is still stored so the next connect
+        // recomputes and retries the stale configs; overwriting it now would
+        // strand those configs in Home Assistant forever.
+        if (cleared.failed == 0) {
+            lastDiscoveryPrefixStore(settings.discoveryPrefix)
+        }
     }
 
     /**
@@ -387,6 +509,17 @@ class MqttManager(
         } catch (e: MqttException) {
             SafeLog.w(TAG, "MQTT publish failed")
         }
+    }
+
+    /**
+     * The discovery-loop publish: unlike [publish] it lets every failure escape
+     * (and treats a missing client as a failure rather than a silent no-op), so
+     * the [runIsolated] loop can count it and record the reason. A single
+     * failure here never aborts the loop.
+     */
+    private fun tryPublishRetained(topic: String, payload: String) {
+        val cli = client ?: error("no MQTT client")
+        cli.publish(topic, payload.toByteArray(Charsets.UTF_8), QOS, true)
     }
 
     private fun subscribe(topic: String) {
@@ -468,20 +601,96 @@ class MqttManager(
             null
         }
 
-    private inner class Callbacks(private val cli: MqttAsyncClient) : MqttCallbackExtended {
+    private inner class Callbacks(private val cli: MqttClientHandle) : MqttCallbackExtended {
 
         override fun connectComplete(reconnect: Boolean, serverURI: String?) {
+            // Keep Paho's callback thread fast: it is the thread on which Paho
+            // releases QoS-1 in-flight slots, so blocking it for the whole
+            // publish burst leaves the window permanently full. Only the cheap
+            // state mutation happens here; the network work is scheduled onto
+            // the manager's executor.
             if (cli !== client || stopped) return
             connected = true
             state = MqttStatus.State.CONNECTED
             lastError = null
+            statusError = null
+            availabilityError = null
             synchronized(lock) { reconnectAttempt = 0 }
-            val settings = settingsProvider()
-            publishRetained(MqttTopics.availability(settings.baseTopic), PAYLOAD_ONLINE)
-            subscribe(MqttTopics.command(settings.baseTopic))
-            publishStatusNow()
-            publishDiscovery()
-            onStatusChanged()
+            // Schedule the connect-time burst *before* notifying the listener:
+            // the listener is app code (a WebSocket broadcast in MainActivity)
+            // and must never be able to prevent availability, discovery and
+            // status from running by throwing.
+            execute {
+                // Re-check identity: settings may have replaced this client
+                // between the callback and this task running.
+                if (stopped || cli !== client) return@execute
+                // Every step below is isolated with its own Throwable catch: a
+                // RuntimeException or Error escaping a step (e.g. a send racing
+                // a teardown) must never abort the remaining steps, and must
+                // never escape this task onto the executor thread — on Android
+                // that reaches the uncaught-exception handler on the
+                // `terebi-mqtt` thread and can kill the process.
+                val settings = try {
+                    settingsProvider()
+                } catch (t: Throwable) {
+                    // Nothing below can build a topic without settings; this is
+                    // the one step that legitimately gates the rest. Record it
+                    // through the same channel as the other publish failures so
+                    // a burst that never ran is not silent.
+                    statusError = safeFailureReason(t)
+                    SafeLog.w(TAG, "MQTT connect task: settings unavailable")
+                    return@execute
+                }
+                try {
+                    // tryPublishRetained, not publishRetained: publish() swallows
+                    // a Paho refusal, and a failed retained availability leaves
+                    // Home Assistant showing the device offline, so it must be
+                    // recorded rather than only logged.
+                    tryPublishRetained(MqttTopics.availability(settings.baseTopic), PAYLOAD_ONLINE)
+                    availabilityError = null
+                } catch (t: Throwable) {
+                    availabilityError = safeFailureReason(t)
+                    SafeLog.w(TAG, "MQTT availability publish failed")
+                }
+                try {
+                    subscribe(MqttTopics.command(settings.baseTopic))
+                } catch (t: Throwable) {
+                    SafeLog.w(TAG, "MQTT subscribe failed")
+                }
+                // Discovery first, so the retained status below carries this
+                // attempt's discoveryTopics/discoveryError. Recorded the same
+                // way an entity failure is: discoveryError + a warning.
+                try {
+                    publishDiscovery()
+                } catch (t: Throwable) {
+                    // publishDiscovery already reset discoveryTopics at its
+                    // start, but reset it again here so a throw from anywhere
+                    // else in the attempt can never report the previous
+                    // connect's topic count alongside this error.
+                    discoveryTopics = 0
+                    discoveryError = safeFailureReason(t)
+                    SafeLog.w(TAG, "MQTT discovery failed")
+                }
+                try {
+                    publishStatusNow()
+                } catch (t: Throwable) {
+                    statusError = safeFailureReason(t)
+                    SafeLog.w(TAG, "MQTT status publish failed")
+                }
+                try {
+                    onStatusChanged()
+                } catch (t: Throwable) {
+                    SafeLog.w(TAG, "MQTT status listener failed")
+                }
+            }
+            // The burst is already queued above, so a throwing listener cannot
+            // suppress it. Guard the call regardless: this runs on Paho's
+            // callback thread and must not escape into Paho.
+            try {
+                onStatusChanged()
+            } catch (t: Throwable) {
+                SafeLog.w(TAG, "MQTT status listener failed")
+            }
         }
 
         override fun connectionLost(cause: Throwable?) {
@@ -557,6 +766,14 @@ class MqttManager(
         const val RECONNECT_MAX_MS = 60_000L
 
         /**
+         * Paho's QoS-1 in-flight window. The default of 10 is too small: a
+         * single connect publishes availability, the status and 21 discovery
+         * configs, and command results share the same window. Raise it well
+         * above the entity count so a connect-time burst always fits.
+         */
+        const val MAX_INFLIGHT = 64
+
+        /**
          * Whether a clean shutdown removes the Home Assistant discovery configs.
          * Off by default: the retained `availability` topic already reports the
          * device offline, so the entities are correctly shown as unavailable and
@@ -587,5 +804,118 @@ class MqttManager(
             val exponent = 1L shl (n - 1)
             return (RECONNECT_BASE_MS * exponent).coerceAtMost(RECONNECT_MAX_MS)
         }
+
+        /** The outcome of one failure-isolated run: counts and the last failure reason. */
+        data class IsolatedResult(val succeeded: Int, val failed: Int, val lastError: String?)
+
+        /**
+         * Runs [action] for every element of [items], isolating each failure: a
+         * throwing item never prevents the ones after it. Returns the
+         * success/failure counts and a short, redacted reason for the last
+         * failure (null when none failed).
+         *
+         * Pure and framework-free so the isolation guarantee and the counting
+         * are directly unit-testable.
+         */
+        fun <T> runIsolated(items: List<T>, action: (T) -> Unit): IsolatedResult {
+            var succeeded = 0
+            var failed = 0
+            var lastError: String? = null
+            for (item in items) {
+                try {
+                    action(item)
+                    succeeded++
+                } catch (t: Throwable) {
+                    failed++
+                    // discoveryFailureReason touches t.message and runs regexes;
+                    // a Throwable whose getMessage() throws (or an Error such as
+                    // OutOfMemoryError) must not escape here and skip the count.
+                    lastError = safeFailureReason(t)
+                }
+            }
+            return IsolatedResult(succeeded, failed, lastError)
+        }
+
+        /**
+         * A short reason for a failed publish: the exception class simple name
+         * plus its redacted message. A `scheme://user:password@host` user-info
+         * is stripped first — [SafeLog.redact] handles query strings, tokens and
+         * bearer values but not a non-http user-info URL — so a broker
+         * credential can never reach the retained status payload.
+         */
+        fun discoveryFailureReason(cause: Throwable): String {
+            val name = cause.javaClass.simpleName.ifEmpty { "Throwable" }
+            val raw = cause.message
+            if (raw.isNullOrBlank()) return name
+            val scrubbed = USERINFO_REGEX.replace(raw) { "${it.groupValues[1]}://<redacted>@" }
+            return "$name: ${SafeLog.redact(scrubbed)}"
+        }
+
+        /**
+         * [discoveryFailureReason] guarded against a hostile throwable: reading
+         * `message` or running the redaction regexes can itself throw (a
+         * `getMessage()` that throws, or an `OutOfMemoryError`), which must not
+         * escape a failure-isolation catch and skip the failure count. Falls
+         * back to the exception's class name.
+         */
+        fun safeFailureReason(cause: Throwable): String =
+            try {
+                discoveryFailureReason(cause)
+            } catch (t: Throwable) {
+                cause.javaClass.simpleName.ifEmpty { "Throwable" }
+            }
+
+        /** Matches `scheme://<user-info>@` so credentials in a URL are removed. */
+        private val USERINFO_REGEX = Regex("""(?i)([a-z][a-z0-9+.\-]*)://[^/\s@]+@""")
+    }
+}
+
+/**
+ * The subset of the Eclipse Paho client [MqttManager] drives.
+ *
+ * It exists as a seam so the real connect/publish code paths — in particular
+ * the Home Assistant discovery loop and the retained status publish — can be
+ * exercised in JVM unit tests with a stub that reproduces Paho's failure
+ * modes, most importantly `MqttException(REASON_CODE_MAX_INFLIGHT)` thrown when
+ * the QoS-1 in-flight window fills up.
+ */
+internal interface MqttClientHandle {
+    val isConnected: Boolean
+    fun setCallback(callback: MqttCallback)
+    fun connect(options: MqttConnectOptions, userContext: Any?, listener: IMqttActionListener)
+    fun publish(topic: String, payload: ByteArray, qos: Int, retained: Boolean): IMqttToken
+    fun subscribe(topic: String, qos: Int): IMqttToken
+    fun disconnect(quiesceTimeout: Long)
+    fun disconnectForcibly(quiesceTimeout: Long, disconnectTimeout: Long)
+    fun close()
+}
+
+/** [MqttClientHandle] backed by a real Eclipse Paho [MqttAsyncClient]. */
+private class PahoClientHandle(private val delegate: MqttAsyncClient) : MqttClientHandle {
+    override val isConnected: Boolean get() = delegate.isConnected
+
+    override fun setCallback(callback: MqttCallback) {
+        delegate.setCallback(callback)
+    }
+
+    override fun connect(options: MqttConnectOptions, userContext: Any?, listener: IMqttActionListener) {
+        delegate.connect(options, userContext, listener)
+    }
+
+    override fun publish(topic: String, payload: ByteArray, qos: Int, retained: Boolean): IMqttToken =
+        delegate.publish(topic, payload, qos, retained)
+
+    override fun subscribe(topic: String, qos: Int): IMqttToken = delegate.subscribe(topic, qos)
+
+    override fun disconnect(quiesceTimeout: Long) {
+        delegate.disconnect(quiesceTimeout)
+    }
+
+    override fun disconnectForcibly(quiesceTimeout: Long, disconnectTimeout: Long) {
+        delegate.disconnectForcibly(quiesceTimeout, disconnectTimeout)
+    }
+
+    override fun close() {
+        delegate.close()
     }
 }

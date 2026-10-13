@@ -427,6 +427,11 @@
     var state = data.mqttState || (data.mqttConnected ? 'connected' : 'disconnected');
     var text = 'MQTT: ' + state;
     if (!data.mqttConnected && data.mqttLastError) text += ' \u2014 ' + data.mqttLastError;
+    // A partially published Home Assistant discovery pass is visible here too,
+    // so a missing entity can be diagnosed without a logcat.
+    if (data.mqttConnected && data.mqttDiscoveryError) {
+      text += ' \u2014 discovery: ' + data.mqttDiscoveryError;
+    }
     el.textContent = text;
   }
 

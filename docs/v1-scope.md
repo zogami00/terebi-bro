@@ -178,9 +178,15 @@ the configs are re-published on every reconnect, and turning discovery off
 publishes an empty retained payload to every topic the app owns so the entities
 are removed. A prefix change is handled too: the app remembers the prefix it
 last published under and clears every config under the previous prefix on the
-next connect, so old entities do not linger. It adds no new route — both
-settings ride the existing `GET`/`POST /api/settings/mqtt`. See the README for
-the entity list.
+next connect, so old entities do not linger. Each config is published
+independently, so one failing entity never suppresses the rest, and the last
+attempt's outcome is exposed read-only as `discoveryTopics`/`discoveryError` on
+the retained `<base>/status` payload and as `mqttDiscoveryTopics`/
+`mqttDiscoveryError` on `GET /api/device` and `GET /api/settings/mqtt`; a failed
+retained `status` or `availability` publish is likewise recorded as
+`statusError` / `mqttStatusError`. It adds
+no new route — both settings ride the existing `GET`/`POST /api/settings/mqtt`.
+See the README for the entity list.
 
 ## Deliberately deferred
 

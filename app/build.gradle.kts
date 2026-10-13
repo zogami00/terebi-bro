@@ -55,8 +55,8 @@ android {
         // path falls back to the legacy systemUiVisibility flags below API 30.
         minSdk = 28
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.2"
+        versionCode = 6
+        versionName = "0.3.3"
     }
 
     signingConfigs {
@@ -117,6 +117,14 @@ android {
 
     lint {
         lintConfig = file("lint.xml")
+    }
+
+    testOptions {
+        // JVM unit tests have no Android runtime: without this, any
+        // `android.util.Log` call (e.g. through SafeLog) throws
+        // "not mocked" and can abort the code path under test. Returning
+        // defaults keeps logging a no-op, as it is on device.
+        unitTests.isReturnDefaultValues = true
     }
 }
 

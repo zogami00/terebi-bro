@@ -13,6 +13,7 @@ import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
 /**
@@ -281,6 +282,7 @@ class ApiRoutes(
 
     private fun device(): Response {
         val snapshot = host.buildState() ?: return Http.serviceUnavailable()
+        val mqtt = host.mqttStatus()
         val obj = mapOf(
             "deviceName" to snapshot.deviceName,
             "appVersion" to snapshot.appVersion,
@@ -291,7 +293,10 @@ class ApiRoutes(
             "ip" to snapshot.ip,
             "port" to snapshot.port,
             "pairedCount" to auth.pairedCount(),
-            "mqttConnected" to host.mqttStatus().connected,
+            "mqttConnected" to mqtt.connected,
+            "mqttDiscoveryTopics" to mqtt.discoveryTopics,
+            "mqttDiscoveryError" to (mqtt.discoveryError ?: JSONObject.NULL),
+            "mqttStatusError" to (mqtt.statusError ?: JSONObject.NULL),
             "extraNetworks" to JSONArray(snapshot.extraNetworks)
         )
         return Http.ok(obj)
@@ -411,7 +416,10 @@ class ApiRoutes(
                 "mqttPasswordSet" to settings.password.isNotEmpty(),
                 "mqttConnected" to status.connected,
                 "mqttState" to status.state.name.lowercase(),
-                "mqttLastError" to status.lastError
+                "mqttLastError" to status.lastError,
+                "mqttDiscoveryTopics" to status.discoveryTopics,
+                "mqttDiscoveryError" to status.discoveryError,
+                "mqttStatusError" to status.statusError
             )
         )
     }

@@ -431,7 +431,7 @@ a published payload.
 | Topic | Direction | QoS / retained | Payload |
 | --- | --- | --- | --- |
 | `<base>/availability` | publish | QoS 1, **retained** | `online` on connect. The **last will is `offline`, retained**, so a crash or a network loss reports `offline`; a clean shutdown also publishes `offline`. |
-| `<base>/status` | publish | QoS 1, **retained** | JSON: the same state object as `GET /api/state` / the WebSocket `state` message (which already includes `ip`, `port`, `webViewVersion`, `appVersion` and `uptimeMs`). Republished on every change and again on each reconnect. |
+| `<base>/status` | publish | QoS 1, **retained** | JSON: the same state object as `GET /api/state` / the WebSocket `state` message (which already includes `ip`, `port`, `webViewVersion`, `appVersion` and `uptimeMs`), plus `discoveryTopics` (how many discovery configs the last publish attempt wrote successfully), `discoveryError` (a short, redacted reason for the last discovery publish failure, or `null`) and `statusError` (a short, redacted reason for the last retained `status` or `availability` publish failure, or `null`). Republished on every change and again on each reconnect. |
 | `<base>/command` | subscribe | QoS 1 | JSON `{"action":"...", ..., "id":"optional"}`. The payload is bounded to **4096 bytes**; a larger one is refused with `payload_too_large` before it is decoded. **Retained messages are ignored** (a retained command would otherwise re-run on every reconnect and reboot) — publish commands with `retain=false`. |
 | `<base>/command/result` | publish | QoS 1, not retained | `{"id":<id>,"ok":true}` or `{"id":<id>,"ok":false,"error":{"code":"...","message":"..."}}` |
 
@@ -534,6 +534,21 @@ removal itself is an MQTT publish.)
 
 Discovery payloads contain **no secrets** — no password, username or token, only
 the device id, its name, the app version, the base topic and the prefix.
+
+Each discovery config is published **independently**: one entity that fails to
+build or publish is counted and skipped, and never prevents the entities after it
+from being published (or the stale-prefix clears from running). The connect-time
+burst does not run on Paho's callback thread and the QoS-1 in-flight window is
+raised well above the entity count, so a full window cannot silently strand the
+configs after the tenth. The result of the last attempt is observable without a
+logcat: the retained `<base>/status` payload carries `discoveryTopics` (configs
+written), `discoveryError` (a short, redacted reason such as `MqttException: ...`,
+or `null`) and `statusError` (a short, redacted reason for a failed retained
+`status` or `availability` publish, or `null`), and `GET /api/device` and
+`GET /api/settings/mqtt` report the same as `mqttDiscoveryTopics` /
+`mqttDiscoveryError` / `mqttStatusError`. A
+redacted reason never includes a credential: any `scheme://user:password@host`
+user-info is stripped before it is stored.
 
 > Home Assistant may still need manual naming for **history/statistics** you
 > record against these entities; discovery creates the entities, not the
