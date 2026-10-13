@@ -296,19 +296,32 @@ the TV and the controller are on different subnets: a TV at `10.10.30.10` and a
 PC at `10.10.1.10` cannot reach each other at all, so the user cannot even open
 the controller to change a setting.
 
-The **trusted networks** setting widens that reach without weakening the rest of
-the model. It is a list of IPv4 CIDR ranges, **empty by default**, in addition
-to the TV's own subnet:
+The **trusted networks** setting changes what "local" means, and it is worth
+being explicit about that. It is a list of IPv4 CIDR ranges, **empty by
+default**, in addition to the TV's own subnet:
 
 - A peer is admitted to the controller when it is in the TV's own subnet **or**
-  inside one of the configured networks.
-- **The list only widens who may *reach* the pairing prompt.** It does not
+  inside one of the configured networks. Reachability therefore changes from
+  **L2-adjacent** (same broadcast domain only) to **routed**: any host that can
+  route to the TV from within a trusted range is admitted, not just the devices
+  sitting next to it.
+- **The list only changes who may reach the pairing prompt.** It does not
   bypass the pairing PIN, the bearer token, the CSRF header, the Host/Origin
   checks, the rate limits or the connection caps. An unpaired device that
   reaches the page sees only the pairing screen and still needs the PIN.
-- A prefix broader than **/8** is refused: a /7 or wider would cover an
-  enormous slice of the internet and effectively disable the control. Host bits
-  are accepted and normalised: `10.10.1.10/24` is stored as `10.10.1.0/24`.
+- An admitted peer can reach `/api/pair`, `/api/info` and the WebSocket
+  handshake. It cannot control the TV without pairing, but **it can drive the
+  global PIN lockout**: five failed `/api/pair` attempts lock pairing for
+  everyone, escalating on repeat to 15 minutes. That is a pairing denial of
+  service from anywhere in the trusted range, so keep the setting as narrow as
+  the layout actually requires.
+- Only **non-globally-routable** ranges are accepted: RFC1918 (`10/8`,
+  `172.16/12`, `192.168/16`), CGNAT (`100.64/10`) and link-local (`169.254/16`).
+  Anything else (`1.0.0.0/8`, `8.8.8.0/24`, …) is refused with `only private,
+  CGNAT or link-local ranges are allowed`.
+- A prefix broader than **/8** is refused, and input must be **canonical**:
+  host bits set is rejected with the correct form named, e.g. `10.10.1.10/24`
+  → `host bits set; did you mean 10.10.1.0/24?`. It is never silently widened.
 - The list holds at most **16** entries. A request with an invalid entry (or an
   17th one) is refused as `400 bad_request` and names the offending entries;
   nothing is silently dropped. Duplicates are collapsed.
@@ -337,17 +350,20 @@ overlay closes that loop:
    CIDR with a TV remote is unworkable, which is exactly why this exists.
 4. The overlay also lists the currently trusted networks, each removable.
 
-The blocked list is bounded to the **5** most recent addresses, de-duplicated by
-IP, and cleared once an address is allowed. It is never written to storage and
-the addresses are never written to the log; the on-screen TV list is the only
-place an address appears.
+The blocked list is bounded to the **5** most recent networks, de-duplicated by
+the network the one-press allow would add (so several addresses in one /24 do
+not render duplicate buttons), and cleared once an address is allowed. It is
+never written to storage and the addresses are never written to the log; the
+on-screen TV list is the only place an address appears. Loopback peers and the
+TV's own address are never recorded, and only well-formed IPv4 peers are
+listed.
 
 ## Testing the controller on an emulator
 
-The control server is reachable only from the TV's own LAN subnet, and an
-Android emulator is NAT'd: the host cannot reach the emulator's LAN address
-directly. A forward arrives at the device as a **loopback** connection, which
-the LAN-only policy rejects. Debug builds therefore also bind the wildcard
+The control server is reachable by default only from the TV's own LAN subnet,
+and an Android emulator is NAT'd: the host cannot reach the emulator's LAN
+address directly. A forward arrives at the device as a **loopback** connection,
+which the LAN-only policy rejects. Debug builds therefore also bind the wildcard
 address and accept loopback peers and the `localhost` / `127.0.0.1` Host forms.
 Forward the port and open the controller from the host browser:
 
@@ -439,18 +455,21 @@ bodies and WebSocket `auth` messages are never logged.
 Validated by building and by JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 131 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 150 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
   limiter, the bound-port write-back rule, the Back-behaviour ladder (including
   the root → setup-page rung) and the Home-URL comparison used by Back handling,
   the long-press hold-decision helper (threshold boundaries, a missing gesture
-  start and a malformed negative delta), strict JSON parsing, request-body
+  start and a malformed negative delta), strict JSON parsing (including the
+  opt-in string-array path), request-body
   framing rules, the mDNS name
   sanitiser, the WebSocket frame-size cap, URL validation, subnet membership, the
   debug-only loopback/localhost peer & Host policy, the CIDR parser and list
-  validation behind the trusted-networks setting (prefix bounds, host-bit
-  normalisation, membership boundaries, de-duplication and the 16-entry cap),
+  validation behind the trusted-networks setting (prefix bounds, the
+  private/CGNAT/link-local range restriction, non-canonical input rejection,
+  membership boundaries, de-duplication and the 16-entry cap), the
+  bounded recently-blocked peer list (bound, de-duplication, recency, clear),
   the extra-network peer policy, the listener bind-host
   choice, and the advisory WebView-version check with its unknown-input
   safety).

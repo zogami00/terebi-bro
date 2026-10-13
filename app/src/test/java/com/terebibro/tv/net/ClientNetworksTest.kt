@@ -37,6 +37,33 @@ class ClientNetworksTest {
     }
 
     @Test
+    fun `accepts private cgnat and link-local ranges`() {
+        assertNotNull(ClientNetworks.parseCidr("10.0.0.0/8"))
+        assertNotNull(ClientNetworks.parseCidr("172.16.0.0/12"))
+        assertNotNull(ClientNetworks.parseCidr("192.168.1.0/24"))
+        assertNotNull(ClientNetworks.parseCidr("100.64.0.0/10"))
+        assertNotNull(ClientNetworks.parseCidr("169.254.0.0/16"))
+    }
+
+    @Test
+    fun `rejects globally routable ranges with a clear reason`() {
+        assertNull(ClientNetworks.parseCidr("1.0.0.0/8"))
+        assertNull(ClientNetworks.parseCidr("8.8.8.0/24"))
+        assertNull(ClientNetworks.parseCidr("172.15.0.0/12"))
+        assertNull(ClientNetworks.parseCidr("172.32.0.0/12"))
+        assertNull(ClientNetworks.parseCidr("100.0.0.0/10"))
+        assertNull(ClientNetworks.parseCidr("169.255.0.0/16"))
+        // A network broader than the range it would name is rejected too.
+        assertNull(ClientNetworks.parseCidr("169.254.0.0/15"))
+        assertNull(ClientNetworks.parseCidr("100.0.0.0/9"))
+
+        val (accepted, rejected) = ClientNetworks.validateList(listOf("1.0.0.0/8"))
+        assertTrue(accepted.isEmpty())
+        assertEquals(1, rejected.size)
+        assertTrue(rejected[0].contains(ClientNetworks.NOT_ALLOWED_REASON))
+    }
+
+    @Test
     fun `rejects malformed and non ipv4 input`() {
         assertNull(ClientNetworks.parseCidr(""))
         assertNull(ClientNetworks.parseCidr("10.10.1.0"))
@@ -65,9 +92,21 @@ class ClientNetworksTest {
     // ------------------------------------------------------------- normalisation
 
     @Test
-    fun `host bits are normalised rather than rejected`() {
-        assertEquals("10.10.1.0/24", ClientNetworks.normalise("10.10.1.10/24"))
-        assertEquals("10.0.0.0/8", ClientNetworks.normalise("10.10.1.10/8"))
+    fun `host bits set is rejected with the canonical form suggested`() {
+        assertNull(ClientNetworks.normalise("10.10.1.10/24"))
+        assertNull(ClientNetworks.parseCidr("10.10.1.10/24"))
+        assertNull(ClientNetworks.parseCidr("10.10.1.10/8"))
+
+        val (accepted, rejected) = ClientNetworks.validateList(listOf("10.10.1.10/24"))
+        assertTrue(accepted.isEmpty())
+        assertEquals(1, rejected.size)
+        assertTrue(rejected[0].contains("host bits set"))
+        assertTrue(rejected[0].contains("did you mean 10.10.1.0/24?"))
+    }
+
+    @Test
+    fun `a canonical network is accepted and round trips`() {
+        assertEquals("10.10.1.0/24", ClientNetworks.normalise("10.10.1.0/24"))
         assertEquals("10.10.1.10/32", ClientNetworks.normalise("10.10.1.10/32"))
         assertNull(ClientNetworks.normalise("10.10.1.10/7"))
         assertNull(ClientNetworks.normalise("garbage"))
@@ -95,14 +134,16 @@ class ClientNetworksTest {
         assertNull(ClientNetworks.containingNetworkFor("not-an-ip"))
         assertNull(ClientNetworks.containingNetworkFor("10.0.0.1", 7))
         assertNull(ClientNetworks.containingNetworkFor("10.0.0.1", 33))
+        // A public peer yields no suggestion: the network could not be admitted.
+        assertNull(ClientNetworks.containingNetworkFor("8.8.8.8"))
     }
 
     // --------------------------------------------------------------- list validation
 
     @Test
-    fun `validate list normalises and de-duplicates in order`() {
+    fun `validate list de-duplicates canonical entries in order`() {
         val (accepted, rejected) = ClientNetworks.validateList(
-            listOf("10.10.1.10/24", "10.10.1.0/24", "192.168.0.0/16")
+            listOf("10.10.1.0/24", "10.10.1.0/24", "192.168.0.0/16")
         )
         assertEquals(listOf("10.10.1.0/24", "192.168.0.0/16"), accepted)
         assertTrue(rejected.isEmpty())

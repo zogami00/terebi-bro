@@ -96,20 +96,28 @@ policy, so the user cannot even open the controller to configure anything. The
 list makes the controller reachable from such a network (for example an admin
 VLAN).
 
-**The trade-off, stated plainly.** The setting widens the address range that may
-*reach* the pairing prompt beyond the TV's own subnet; a peer admitted this way
-can load the controller page. It does **not** bypass any other control: the
+**The trade-off, stated plainly.** Reachability changes from **L2-adjacent** to
+**routed**: any host that can route to the TV from within a trusted range is
+admitted, not only the devices on the TV's own broadcast domain. An admitted
+peer can reach `/api/pair`, `/api/info` and the WebSocket handshake. The
 pairing PIN, the bearer token, the CSRF header, the Host/Origin checks, the
 per-token/per-peer rate limits and the connection caps all still apply, so an
-admitted-but-unpaired device can only reach the pairing screen. The blast radius
-is bounded deliberately:
+admitted-but-unpaired device cannot control the TV. But it **can drive the
+global PIN lockout**: five failed `/api/pair` attempts lock pairing for
+everyone, escalating on repeat to 15 minutes — a pairing denial of service from
+anywhere in the trusted range. Keep the setting as narrow as the layout
+actually requires. The blast radius is bounded deliberately:
 
-- A prefix broader than **/8** is refused (it would effectively disable the
-  control), and the list is capped at **16** entries.
+- Only **non-globally-routable** ranges are accepted: RFC1918 (`10/8`,
+  `172.16/12`, `192.168/16`), CGNAT (`100.64/10`) and link-local (`169.254/16`).
+  A public network such as `1.0.0.0/8` is refused. A prefix broader than **/8**
+  is refused, and input must be **canonical**: host bits set is rejected with
+  the correct form named (`10.10.1.10/24` → `10.10.1.0/24`) rather than
+  silently widened. The list is capped at **16** entries.
 - The setting is **empty by default**, so the shipped behaviour is identical to
   "local-network binding only".
 - Because the blocked subnet cannot reach the controller to configure it, the TV
-  setup overlay lists recently-blocked client addresses (in memory only, never
+  setup overlay lists recently-blocked client networks (in memory only, never
   persisted or logged) with a one-press allow of the containing /24.
 
 ## Deliberately deferred
@@ -131,7 +139,7 @@ is bounded deliberately:
 
 ## Verification
 
-Compiled, JVM-unit-tested (`131` tests), linted (`0` errors) and built as a
+Compiled, JVM-unit-tested (`150` tests), linted (`0` errors) and built as a
 signed release.
 
 **Verified end-to-end by the maintainer on the reference Android 9 (API 28)

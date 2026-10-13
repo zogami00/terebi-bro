@@ -7,10 +7,13 @@ package com.terebibro.tv.net
  * Android networking APIs and the parser is directly unit-testable. Address
  * parsing reuses [SubnetMatcher.parseIpv4].
  *
- * A host address with host bits set is *not* an error: `10.10.1.10/24` is
- * normalised to the network it names, `10.10.1.0/24`. A prefix broader than
- * [/8][MIN_PREFIX] is refused (it would effectively disable the control), as is
- * anything that is not a dotted-quad IPv4 address with a `/len` suffix.
+ * Only **non-globally-routable** networks are accepted: RFC1918 (`10/8`,
+ * `172.16/12`, `192.168/16`), CGNAT (`100.64/10`) and link-local (`169.254/16`).
+ * Anything else is refused with [NOT_ALLOWED_REASON], so a public /8 such as
+ * `1.0.0.0/8` can never widen the control surface to the internet. A prefix
+ * broader than [/8][MIN_PREFIX] is also refused, and so is non-canonical input:
+ * host bits set (`10.10.1.10/24`) is a validation error naming the canonical
+ * form rather than a silent widening to `10.10.1.0/24`.
  */
 object ClientNetworks {
 
@@ -21,6 +24,9 @@ object ClientNetworks {
      */
     const val MIN_PREFIX = 8
 
+    /** Reason reported for a well-formed network that is not private/CGNAT/link-local. */
+    const val NOT_ALLOWED_REASON = "only private, CGNAT or link-local ranges are allowed"
+
     /** The narrowest single-host prefix. */
     const val MAX_PREFIX = 32
 
@@ -30,21 +36,25 @@ object ClientNetworks {
     /** Prefix suggested by [containingNetworkFor] for a blocked client. */
     const val SUGGEST_PREFIX = 24
 
-    /** A parsed, host-bit-normalised network: the masked network address and prefix. */
+    /** A parsed canonical network: the network address and prefix. */
     data class Cidr(val network: Long, val prefix: Int) {
-        /** The normalised `a.b.c.d/len` form. */
+        /** The canonical `a.b.c.d/len` form. */
         override fun toString(): String = format(network, prefix)
     }
 
-    /** Parses `a.b.c.d/len`, masking host bits. Null for anything invalid. */
+    /**
+     * Parses a canonical `a.b.c.d/len` CIDR. Null for anything invalid,
+     * out-of-bounds, not private/CGNAT/link-local, or with host bits set.
+     */
     fun parseCidr(value: String): Cidr? = when (val parsed = parseDetailed(value)) {
         is Parsed.Ok -> parsed.cidr
         is Parsed.Bad -> null
     }
 
     /**
-     * Masks [value] to its prefix and returns `a.b.c.d/len`, or null when it is
-     * not a valid, in-bounds CIDR. `10.10.1.10/24` becomes `10.10.1.0/24`.
+     * Returns the canonical `a.b.c.d/len` form of [value], or null when it is
+     * not a valid, in-bounds, non-globally-routable CIDR. Non-canonical input
+     * (`10.10.1.10/24`) is refused rather than silently widened.
      */
     fun normalise(value: String): String? = parseCidr(value)?.toString()
 
@@ -56,19 +66,22 @@ object ClientNetworks {
     }
 
     /**
-     * The masked network of width [prefix] that [ip] falls in, as
+     * The canonical network of width [prefix] that [ip] falls in, as
      * `a.b.c.d/prefix` — used to suggest an entry for a blocked client without
-     * making the user type a CIDR on a TV remote. Null for an invalid address or
-     * an out-of-bounds prefix.
+     * making the user type a CIDR on a TV remote. Null for an invalid address, an
+     * out-of-bounds prefix, or a suggestion that is not a private/CGNAT/link-local
+     * range (so a public peer never yields an un-addable button).
      */
     fun containingNetworkFor(ip: String, prefix: Int = SUGGEST_PREFIX): String? {
         if (prefix < MIN_PREFIX || prefix > MAX_PREFIX) return null
         val address = SubnetMatcher.parseIpv4(ip) ?: return null
-        return format(address and mask(prefix), prefix)
+        val network = address and mask(prefix)
+        if (!isAllowedRange(network, prefix)) return null
+        return format(network, prefix)
     }
 
     /**
-     * Normalises [values] and returns the accepted, de-duplicated list (in
+     * Validates [values] and returns the accepted, de-duplicated list (in
      * input order, capped at [MAX_ENTRIES]) paired with a human-readable reason
      * for every entry that was refused. Duplicates of an already-accepted entry
      * are collapsed silently; invalid entries and entries past the cap are
@@ -124,8 +137,33 @@ object ClientNetworks {
         if (prefix < MIN_PREFIX || prefix > MAX_PREFIX) {
             return Parsed.Bad("prefix must be between /$MIN_PREFIX and /$MAX_PREFIX")
         }
-        return Parsed.Ok(Cidr(ip and mask(prefix), prefix))
+        val network = ip and mask(prefix)
+        if (network != ip) {
+            return Parsed.Bad("host bits set; did you mean ${format(network, prefix)}?")
+        }
+        if (!isAllowedRange(network, prefix)) return Parsed.Bad(NOT_ALLOWED_REASON)
+        return Parsed.Ok(Cidr(network, prefix))
     }
+
+    /** A canonical range that may be trusted. */
+    private data class Range(val network: Long, val prefix: Int)
+
+    /**
+     * The non-globally-routable ranges that may be trusted: RFC1918, CGNAT and
+     * link-local. A candidate is admissible only when it is fully contained in
+     * one of these (its prefix is at least as specific and its masked network
+     * matches).
+     */
+    private val ALLOWED_RANGES = listOf(
+        Range(SubnetMatcher.parseIpv4("10.0.0.0")!!, 8),
+        Range(SubnetMatcher.parseIpv4("172.16.0.0")!!, 12),
+        Range(SubnetMatcher.parseIpv4("192.168.0.0")!!, 16),
+        Range(SubnetMatcher.parseIpv4("100.64.0.0")!!, 10),
+        Range(SubnetMatcher.parseIpv4("169.254.0.0")!!, 16)
+    )
+
+    private fun isAllowedRange(network: Long, prefix: Int): Boolean =
+        ALLOWED_RANGES.any { prefix >= it.prefix && (network and mask(it.prefix)) == it.network }
 
     private fun mask(prefix: Int): Long =
         if (prefix >= MAX_PREFIX) 0xFFFFFFFFL

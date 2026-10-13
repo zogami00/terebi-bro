@@ -76,16 +76,19 @@ class AuthManager(
     /**
      * Loopback, own-address and off-subnet peers are rejected, unless the peer
      * falls inside one of the configured extra trusted client networks. Rejected
-     * non-empty addresses are recorded for the TV overlay's one-press allow
-     * (see [blockedPeers]); peer addresses are never logged.
+     * peers that could plausibly be a real controller — a valid, non-loopback
+     * IPv4 address that is not the device's own — are recorded for the TV
+     * overlay's one-press allow (see [blockedPeers]); peer addresses are never
+     * logged.
      *
      * The trusted list only widens who may *reach* the pairing prompt. Every
      * other control (PIN, token, CSRF, Host/Origin, rate limits, connection
      * caps) still applies to a peer admitted this way.
      */
     fun isPeerAllowed(peerIp: String?): Boolean {
-        val allowed = isPeerAllowed(peerIp, localNetwork.current(), allowLocalhost, config.extraClientNetworks)
-        if (!allowed && !peerIp.isNullOrEmpty()) recentlyBlocked.record(peerIp)
+        val info = localNetwork.current()
+        val allowed = isPeerAllowed(peerIp, info, allowLocalhost, config.extraClientNetworks)
+        if (!allowed && isRecordablePeer(peerIp, info)) recentlyBlocked.record(peerIp.orEmpty())
         return allowed
     }
 
@@ -204,6 +207,21 @@ class AuthManager(
             if (peerIp == info.ip) return false
             if (SubnetMatcher.isSameSubnet(peerIp, info.ip, info.prefixLength)) return true
             return extraNetworks.any { ClientNetworks.contains(it, peerIp) }
+        }
+
+        /**
+         * Whether a refused peer should be surfaced on the TV's one-press allow
+         * list. Only a well-formed, non-loopback IPv4 address that is not the
+         * device's own address qualifies: an unparseable address, a loopback
+         * probe or the TV itself would otherwise pollute the list with entries a
+         * one-press allow can never usefully admit.
+         */
+        fun isRecordablePeer(peerIp: String?, info: LocalNetwork.Info?): Boolean {
+            if (peerIp.isNullOrEmpty()) return false
+            if (SubnetMatcher.parseIpv4(peerIp) == null) return false
+            if (SubnetMatcher.isLoopback(peerIp)) return false
+            if (info != null && peerIp == info.ip) return false
+            return true
         }
 
         /**

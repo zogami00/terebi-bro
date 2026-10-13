@@ -11,7 +11,9 @@ package com.terebibro.tv.net
  * are exactly the kind of detail `SafeLog` rules forbid): the on-screen TV list
  * is the only place an address is shown.
  *
- * Entries are de-duplicated by IP and the oldest is evicted past [maxEntries].
+ * Entries are de-duplicated by the network [ClientNetworks.containingNetworkFor]
+ * would suggest, so several addresses in one /24 collapse to a single button;
+ * the oldest is evicted past [maxEntries].
  */
 class RecentlyBlockedPeers(
     private val maxEntries: Int = DEFAULT_MAX_ENTRIES,
@@ -27,10 +29,16 @@ class RecentlyBlockedPeers(
 
     fun record(ip: String) {
         if (ip.isEmpty()) return
+        // De-duplicate by the network a one-press allow would add, not the raw
+        // address, so 10.10.1.10 and 10.10.1.20 do not render two identical
+        // buttons. An address with no admissible network (a public range, or one
+        // the policy refuses) would never render a button, so it is dropped
+        // rather than stored under its raw address and occupying a slot.
+        val key = ClientNetworks.containingNetworkFor(ip) ?: return
         synchronized(lock) {
-            // Re-inserting moves the address to the most-recent end of the map.
-            entries.remove(ip)
-            entries[ip] = Blocked(ip, now())
+            // Re-inserting moves the entry to the most-recent end of the map.
+            entries.remove(key)
+            entries[key] = Blocked(ip, now())
             while (entries.size > maxEntries) {
                 val iterator = entries.keys.iterator()
                 if (!iterator.hasNext()) break

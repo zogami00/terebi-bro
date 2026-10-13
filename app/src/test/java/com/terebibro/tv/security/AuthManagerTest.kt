@@ -330,4 +330,16 @@ class AuthManagerTest {
         assertFalse(AuthManager.isPeerAllowed("", device, false, emptyList()))
         assertFalse(AuthManager.isPeerAllowed("10.0.2.99", null, false, extraNetworks))
     }
+
+    @Test
+    fun `only real off-device ipv4 peers are recordable`() {
+        // A plausible remote peer is recorded.
+        assertTrue(AuthManager.isRecordablePeer("10.10.1.10", device))
+        // The device's own address, loopback and anything unparseable are not.
+        assertFalse(AuthManager.isRecordablePeer(device.ip, device))
+        assertFalse(AuthManager.isRecordablePeer("127.0.0.1", device))
+        assertFalse(AuthManager.isRecordablePeer("not-an-ip", device))
+        assertFalse(AuthManager.isRecordablePeer(null, device))
+        assertFalse(AuthManager.isRecordablePeer("", device))
+    }
 }
