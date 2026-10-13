@@ -87,6 +87,22 @@ object MqttSettingsValidator {
             trimmed
         }
 
+        val discoveryPrefix = update.discoveryPrefix?.let { raw ->
+            val trimmed = raw.trim().trim('/')
+            if (trimmed.length > MAX_TOPIC) {
+                return Result.Invalid("discoveryPrefix", "discoveryPrefix is too long (max $MAX_TOPIC)")
+            }
+            if (trimmed.any { it.isWhitespace() || it.code < 0x20 || it.code == 0x7F }) {
+                return Result.Invalid("discoveryPrefix", "discoveryPrefix must not contain whitespace or control characters")
+            }
+            if (trimmed.contains('+') || trimmed.contains('#')) {
+                return Result.Invalid("discoveryPrefix", "discoveryPrefix must not contain the wildcards '+' or '#'")
+            }
+            // A blank prefix is meaningless; fall back to the conventional value
+            // rather than publishing to a topic with an empty leading level.
+            trimmed.ifEmpty { MqttSettings.DEFAULT_DISCOVERY_PREFIX }
+        }
+
         return Result.Valid(
             MqttUpdate(
                 enabled = update.enabled,
@@ -95,7 +111,9 @@ object MqttSettingsValidator {
                 tls = update.tls,
                 username = username,
                 password = password,
-                baseTopic = baseTopic
+                baseTopic = baseTopic,
+                discoveryEnabled = update.discoveryEnabled,
+                discoveryPrefix = discoveryPrefix
             )
         )
     }

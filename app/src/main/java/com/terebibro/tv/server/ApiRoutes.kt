@@ -99,7 +99,7 @@ class ApiRoutes(
             Route(
                 Method.POST,
                 true,
-                setOf("enabled", "host", "port", "tls", "username", "password", "baseTopic"),
+                setOf("enabled", "host", "port", "tls", "username", "password", "baseTopic", "discoveryEnabled", "discoveryPrefix"),
                 handler = { _, _, v -> setMqttSettings(v) }
             )
         )
@@ -406,6 +406,8 @@ class ApiRoutes(
                 "tls" to settings.tls,
                 "username" to settings.username,
                 "baseTopic" to settings.baseTopic,
+                "discoveryEnabled" to settings.discoveryEnabled,
+                "discoveryPrefix" to settings.discoveryPrefix,
                 "mqttPasswordSet" to settings.password.isNotEmpty(),
                 "mqttConnected" to status.connected,
                 "mqttState" to status.state.name.lowercase(),
@@ -429,7 +431,9 @@ class ApiRoutes(
                 tls = Json.optionalBool(values, "tls"),
                 username = Json.optionalString(values, "username", MqttSettingsValidator.MAX_CREDENTIAL),
                 password = Json.optionalString(values, "password", MqttSettingsValidator.MAX_CREDENTIAL),
-                baseTopic = Json.optionalString(values, "baseTopic", MqttSettingsValidator.MAX_TOPIC)
+                baseTopic = Json.optionalString(values, "baseTopic", MqttSettingsValidator.MAX_TOPIC),
+                discoveryEnabled = Json.optionalBool(values, "discoveryEnabled"),
+                discoveryPrefix = Json.optionalString(values, "discoveryPrefix", MqttSettingsValidator.MAX_TOPIC)
             )
         } catch (e: Json.BadJson) {
             return Http.error(Response.Status.BAD_REQUEST, "bad_request", e.message ?: "Invalid request body")

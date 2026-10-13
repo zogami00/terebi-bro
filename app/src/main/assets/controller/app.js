@@ -439,10 +439,13 @@
       setValueIfIdle('mqttPortInput', d.port);
       setValueIfIdle('mqttUsernameInput', d.username);
       setValueIfIdle('mqttBaseTopicInput', d.baseTopic);
+      setValueIfIdle('mqttDiscoveryPrefixInput', d.discoveryPrefix);
       var enabled = $('mqttEnabledToggle');
       if (enabled && document.activeElement !== enabled) enabled.checked = !!d.enabled;
       var tls = $('mqttTlsToggle');
       if (tls && document.activeElement !== tls) tls.checked = !!d.tls;
+      var discovery = $('mqttDiscoveryToggle');
+      if (discovery && document.activeElement !== discovery) discovery.checked = !!d.discoveryEnabled;
       var pw = $('mqttPasswordInput');
       if (pw) pw.placeholder = mqttPasswordSet ? 'leave blank to keep' : 'no password set';
       setMqttStatus(d);
@@ -469,7 +472,9 @@
       port: port,
       tls: $('mqttTlsToggle').checked,
       username: $('mqttUsernameInput').value,
-      baseTopic: $('mqttBaseTopicInput').value.trim()
+      baseTopic: $('mqttBaseTopicInput').value.trim(),
+      discoveryEnabled: $('mqttDiscoveryToggle').checked,
+      discoveryPrefix: $('mqttDiscoveryPrefixInput').value.trim()
     };
     // Password is write-only: send it only when the field is non-empty so an
     // untouched field never clears a stored password.

@@ -170,6 +170,18 @@ read-only `mqttConnected` in `GET /api/device`. A `POST` is validated as a whole
 — a bad value is `400 bad_request` naming the field and nothing is written. The
 password is never returned by a `GET` (a boolean `mqttPasswordSet` is).
 
+A further extension on top of the MQTT client is **Home Assistant MQTT
+Discovery** (`mqttDiscoveryEnabled`, default **on**; `mqttDiscoveryPrefix`,
+default `homeassistant`). When enabled, the app publishes retained discovery
+configs so Home Assistant creates one device with its entities automatically;
+the configs are re-published on every reconnect, and turning discovery off
+publishes an empty retained payload to every topic the app owns so the entities
+are removed. A prefix change is handled too: the app remembers the prefix it
+last published under and clears every config under the previous prefix on the
+next connect, so old entities do not linger. It adds no new route — both
+settings ride the existing `GET`/`POST /api/settings/mqtt`. See the README for
+the entity list.
+
 ## Deliberately deferred
 
 - **URL allowlist / restricted mode (§20).** V1 runs in open mode only; the
@@ -185,7 +197,7 @@ password is never returned by a `GET` (a boolean `mqttPasswordSet` is).
 
 ## Verification
 
-Compiled, JVM-unit-tested (`190` tests), linted (`0` errors) and built as a
+Compiled, JVM-unit-tested (`215` tests), linted (`0` errors) and built as a
 signed release.
 
 **Verified end-to-end by the maintainer on the reference Android 9 (API 28)

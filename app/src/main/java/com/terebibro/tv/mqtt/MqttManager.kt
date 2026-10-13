@@ -44,8 +44,14 @@ class MqttManager(
     private val clientIdProvider: () -> String,
     private val dispatcher: Dispatcher,
     private val stateProvider: () -> BrowserState?,
+    /** The stable, sanitised device segment used for the discovery node id. */
+    private val deviceIdProvider: () -> String,
     /** Invoked whenever the connection state changes; must be cheap and non-blocking. */
-    private val onStatusChanged: () -> Unit = {}
+    private val onStatusChanged: () -> Unit = {},
+    /** The discovery prefix persisted on the previous connect, or null if never published. */
+    private val lastDiscoveryPrefixProvider: () -> String? = { null },
+    /** Persists the discovery prefix actually used so a later change can clear the old one. */
+    private val lastDiscoveryPrefixStore: (String) -> Unit = {}
 ) {
 
     /** Dispatches a parsed command; the implementation must hop to the UI thread itself. */
@@ -118,6 +124,7 @@ class MqttManager(
         stopped = true
         execute {
             cancelReconnect()
+            if (DISCOVERY_REMOVE_ON_SHUTDOWN) removeDiscoveryOnShutdown()
             publishOffline()
             teardownClient()
             connected = false
@@ -288,6 +295,73 @@ class MqttManager(
         }
     }
 
+    /**
+     * Publishes the Home Assistant MQTT Discovery configs, retained, so the
+     * device appears as one Home Assistant device with its entities. Called on
+     * every connect (including every reconnect).
+     *
+     * When discovery is disabled the app instead publishes an **empty retained
+     * payload** to every discovery topic it owns, so Home Assistant removes the
+     * entities rather than showing them permanently unavailable.
+     *
+     * Discovery payloads carry no credentials: only the device id, its name,
+     * the app version and the base topic.
+     *
+     * If the discovery prefix changed since the last connect, the configs left
+     * under the previous prefix are first cleared with empty retained payloads
+     * (otherwise they would linger in Home Assistant forever), then the new
+     * prefix is persisted. Both topic lists are built from the same
+     * [MqttDiscovery.entities] result so they cannot drift.
+     */
+    private fun publishDiscovery() {
+        val settings = settingsProvider()
+        val snapshot = stateProvider() ?: return
+        val deviceId = deviceIdProvider()
+        val entities = MqttDiscovery.entities(
+            deviceId = deviceId,
+            deviceName = snapshot.deviceName,
+            appVersion = snapshot.appVersion,
+            base = settings.baseTopic
+        )
+        for (topic in MqttDiscovery.staleConfigTopics(
+            previousPrefix = lastDiscoveryPrefixProvider(),
+            currentPrefix = settings.discoveryPrefix,
+            deviceId = deviceId,
+            entities = entities
+        )) {
+            publishRetained(topic, "")
+        }
+        for (entity in entities) {
+            val topic = MqttDiscovery.topic(settings.discoveryPrefix, deviceId, entity)
+            // An enabled device publishes its config; a disabled one clears it
+            // with an empty retained payload.
+            publishRetained(topic, if (settings.discoveryEnabled) entity.config.toString() else "")
+        }
+        lastDiscoveryPrefixStore(settings.discoveryPrefix)
+    }
+
+    /**
+     * Clears every discovery config this device owns (empty retained payload).
+     * Only performed on a clean shutdown when [DISCOVERY_REMOVE_ON_SHUTDOWN] is
+     * on; by default the configs are left in place — the retained `availability`
+     * topic already reports the device offline, which is what `availability`
+     * exists for.
+     */
+    private fun removeDiscoveryOnShutdown() {
+        if (!connected) return
+        val settings = settingsProvider()
+        val snapshot = stateProvider() ?: return
+        val deviceId = deviceIdProvider()
+        for (entity in MqttDiscovery.entities(
+            deviceId,
+            snapshot.deviceName,
+            snapshot.appVersion,
+            settings.baseTopic
+        )) {
+            publishRetained(MqttDiscovery.topic(settings.discoveryPrefix, deviceId, entity), "")
+        }
+    }
+
     private fun publishOffline() {
         val cli = client ?: return
         if (!connected) return
@@ -406,6 +480,7 @@ class MqttManager(
             publishRetained(MqttTopics.availability(settings.baseTopic), PAYLOAD_ONLINE)
             subscribe(MqttTopics.command(settings.baseTopic))
             publishStatusNow()
+            publishDiscovery()
             onStatusChanged()
         }
 
@@ -480,6 +555,14 @@ class MqttManager(
         private const val PUBLISH_TIMEOUT_MS = 3_000L
         const val RECONNECT_BASE_MS = 1_000L
         const val RECONNECT_MAX_MS = 60_000L
+
+        /**
+         * Whether a clean shutdown removes the Home Assistant discovery configs.
+         * Off by default: the retained `availability` topic already reports the
+         * device offline, so the entities are correctly shown as unavailable and
+         * are re-discovered on the next start without a gap.
+         */
+        const val DISCOVERY_REMOVE_ON_SHUTDOWN = false
 
         /** How an inbound message is handled, decided before any payload decode. */
         enum class IncomingDecision { PROCESS, IGNORE_RETAINED, TOO_LARGE }

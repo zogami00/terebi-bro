@@ -114,4 +114,26 @@ class MqttSettingsValidatorTest {
         assertTrue(result is MqttSettingsValidator.Result.Invalid)
         assertEquals("port", (result as MqttSettingsValidator.Result.Invalid).field)
     }
+
+    @Test
+    fun `a discovery prefix is normalised, defaulted when blank and rejects wildcards`() {
+        assertEquals(
+            "homeassistant",
+            valid(MqttUpdate(discoveryPrefix = "  /homeassistant/  ")).discoveryPrefix
+        )
+        assertEquals("homeassistant", valid(MqttUpdate(discoveryPrefix = "   ")).discoveryPrefix)
+        assertEquals("my/ha", valid(MqttUpdate(discoveryPrefix = "my/ha")).discoveryPrefix)
+        assertEquals("discoveryPrefix", invalid(MqttUpdate(discoveryPrefix = "a/+/b")).field)
+        assertEquals("discoveryPrefix", invalid(MqttUpdate(discoveryPrefix = "a/#")).field)
+        assertEquals(
+            "discoveryPrefix",
+            invalid(MqttUpdate(discoveryPrefix = "a".repeat(MqttSettingsValidator.MAX_TOPIC + 1))).field
+        )
+    }
+
+    @Test
+    fun `the discovery toggle round-trips`() {
+        assertEquals(true, valid(MqttUpdate(discoveryEnabled = true)).discoveryEnabled)
+        assertEquals(false, valid(MqttUpdate(discoveryEnabled = false)).discoveryEnabled)
+    }
 }

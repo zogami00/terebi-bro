@@ -152,6 +152,11 @@
     <label for="mqttBaseTopicInput">Base topic</label>
     <input id="mqttBaseTopicInput" type="text" autocomplete="off" placeholder="terebibro/&lt;device&gt;">
 
+    <label class="check"><input id="mqttDiscoveryToggle" type="checkbox"> Home Assistant discovery</label>
+
+    <label for="mqttDiscoveryPrefixInput">Discovery prefix</label>
+    <input id="mqttDiscoveryPrefixInput" type="text" autocomplete="off" placeholder="homeassistant">
+
     <div class="row">
       <button id="saveMqtt" class="primary">Save MQTT</button>
       <button id="clearMqttPassword" class="danger">Clear password</button>

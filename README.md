@@ -25,7 +25,8 @@ LAN opens the bundled controller page and drives the TV browser.
   Reload, Refresh WebView, **Enter URL**, Settings, Device information and
   Exit App — so the tablet can be driven without a second device.
 - Optional **MQTT control** (off by default): the TV can be driven from any MQTT
-  broker. See [MQTT control](#mqtt-control).
+  broker, and publishes **Home Assistant MQTT Discovery** so it appears as one
+  device. See [MQTT control](#mqtt-control).
 - mDNS advertisement as `<deviceName>.local`, with an IP fallback.
 - Automatic retry screen when the page is unavailable.
 - WebView renderer crash recovery.
@@ -194,6 +195,8 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | MQTT broker port | 1883 |
 | MQTT TLS | off (plain `tcp://`) |
 | MQTT base topic | `terebibro/<deviceName>` |
+| HA MQTT discovery | on |
+| HA discovery prefix | `homeassistant` |
 
 Changing the controller port persists the new value only after the bind is
 probed; an unavailable port is rejected with `409 port_unavailable` and the old
@@ -402,7 +405,9 @@ The setting is managed from the controller's **MQTT** panel and via
 `GET`/`POST /api/settings/mqtt`; every field is editable at runtime and
 persisted (`mqttEnabled`, `mqttHost`, `mqttPort` default **1883**, `mqttTls`
 default **off**, `mqttUsername`, `mqttPassword`, `mqttBaseTopic` default
-`terebibro/<mdnsName>`). TLS is supported: with `mqttTls` on, the client connects
+`terebibro/<mdnsName>`, `mqttDiscoveryEnabled` default **true**,
+`mqttDiscoveryPrefix` default **homeassistant**). TLS is supported: with
+`mqttTls` on, the client connects
 over `ssl://`, otherwise `tcp://`. The MQTT client is a plain-Java client
 (Eclipse Paho) — no Android service and no Netty.
 
@@ -460,6 +465,79 @@ Example:
   server, the WebView and mDNS keep working. The controller shows the
   connection state (connected / disconnected / error and the last error), and
   `GET /api/device` reports `mqttConnected`.
+
+### Home Assistant MQTT Discovery
+
+When MQTT is enabled, the TV also publishes **Home Assistant MQTT Discovery**
+configs, so Home Assistant creates one device — **"Terebi Bro"** — with its
+entities automatically, with no YAML. Discovery is **on by default** (it is only
+meaningful while MQTT itself is on) and its prefix is configurable
+(`mqttDiscoveryPrefix`, default `homeassistant`). Both are managed from the
+controller's **MQTT** panel and via `GET`/`POST /api/settings/mqtt`.
+
+Configs are **retained** and published on every connect, and re-published on
+every reconnect. The topic shape is
+`<prefix>/<component>/terebibro_<deviceId>/<objectId>/config`, where
+`<deviceId>` is the same stable, sanitised device segment the MQTT client id and
+base topic use, so a restart never changes the node id and Home Assistant never
+creates a duplicate device. Every payload carries a `unique_id`, the shared
+`device` block, `has_entity_name: true` (so HA names each entity relative to the
+device and a second TV does not get suffixed ids like `button.reload_2`) and the
+`availability` wiring (`online` / `offline`).
+
+The `text` entities set `max: 255` (Home Assistant's own state limit) so a URL up
+to the 2048 characters our command parser accepts is not silently rejected by
+HA's default `max: 100`. The `Current URL` and `Title` sensors truncate their
+`value_template` to 255 characters for the same reason, and the `text`
+`command_template`s build their JSON with HA's `tojson` filter so a value
+containing a quote or backslash stays valid JSON instead of being dropped as
+malformed.
+
+Changing `mqttDiscoveryPrefix` is safe: the app remembers the prefix it last
+published under, and on the next connect it first publishes an empty retained
+payload to every config topic under the **previous** prefix, so the old entities
+do not linger in Home Assistant.
+
+What appears:
+
+| Entity | Domain | Source |
+| --- | --- | --- |
+| Current URL | `sensor` | `{{ value_json.url }}` |
+| Title | `sensor` | `{{ value_json.title }}` |
+| Uptime | `sensor` | `uptimeMs` → seconds, `device_class: duration` |
+| WebView version | `sensor` (diagnostic) | `{{ value_json.webViewVersion }}` |
+| App version | `sensor` (diagnostic) | `{{ value_json.appVersion }}` |
+| IP address | `sensor` (diagnostic) | `{{ value_json.ip }}` |
+| Port | `sensor` (diagnostic) | `{{ value_json.port }}` |
+| Network | `sensor` (diagnostic) | `{{ value_json.network }}` |
+| Android version | `sensor` (diagnostic) | `{{ value_json.androidVersion }}` |
+| Loading | `binary_sensor` | `value_json.loading` (`ON` / `OFF`) |
+| Connectivity | `binary_sensor` | the availability topic (`online` / `offline`) |
+| Reload, Restart WebView, Back, Home, Forward, Stop, Clear Cache, Clear Site Data | `button` | a `command` JSON payload |
+| Home URL | `text` | mirrors `homeUrl`, writes `set-home` |
+| Open URL | `text` | writes `open` (no state) |
+
+The sensor/availability entities report on `<base>/status` and
+`<base>/availability`; the buttons and text entities publish to `<base>/command`
+with the same action names the command parser accepts (`open`, `set-home`,
+`home`, `back`, `forward`, `reload`, `stop`, `restart-webview`, `clear-cache`,
+`clear-site-data`).
+
+**Removing it.** Turn discovery **off** in the MQTT panel (or
+`POST /api/settings/mqtt {"discoveryEnabled": false}`). The app then publishes an
+**empty retained payload** to every discovery topic it owns, so Home Assistant
+removes the entities instead of showing them permanently unavailable. A clean
+shutdown does *not* remove them by default: the retained `availability` topic
+already reports the device offline, which is what availability is for. (Removing
+also requires MQTT to be connected at the moment you disable it, since the
+removal itself is an MQTT publish.)
+
+Discovery payloads contain **no secrets** — no password, username or token, only
+the device id, its name, the app version, the base topic and the prefix.
+
+> Home Assistant may still need manual naming for **history/statistics** you
+> record against these entities; discovery creates the entities, not the
+> recorder/long-term-statistics configuration.
 
 ## Testing the controller on an emulator
 
@@ -558,7 +636,7 @@ bodies and WebSocket `auth` messages are never logged.
 Validated by building and by JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 190 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 215 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
   limiter, the bound-port write-back rule, the Back-behaviour ladder (including
@@ -582,7 +660,13 @@ Validated by building and by JVM unit tests:
   action, missing `url`, invalid URL and malformed JSON), the status payload
   (built from the shared state object and carrying the required device fields),
   the settings validator (bounded host/port/topic, field-naming and no partial
-  write) and the capped reconnect backoff).
+  write), the discovery builder (topic shape and device-name sanitising, stable
+  `unique_id`s, the shared `device` block, `has_entity_name`, the text `max`,
+  the truncated URL/title templates, availability wiring, the stale-config
+  clearing after a prefix change, and a table-driven check that every
+  button/text action resolves through the real command parser, including a
+  `tojson` payload carrying a quote and a backslash) and the capped reconnect
+  backoff).
 - `lintDebug` runs (0 errors, `NewApi`-clean after lowering `minSdk`).
 - `assembleRelease` builds and produces a signed `app-release.apk`.
 

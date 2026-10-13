@@ -204,6 +204,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             clientIdProvider = { MqttTopics.clientId(config.mdnsName) },
             dispatcher = this,
             stateProvider = { buildState() },
+            deviceIdProvider = { MqttTopics.segment(config.mdnsName) },
+            lastDiscoveryPrefixProvider = { config.mqttLastDiscoveryPrefix },
+            lastDiscoveryPrefixStore = { config.mqttLastDiscoveryPrefix = it },
             onStatusChanged = {
                 // Surface connect/disconnect in the controller without touching
                 // MQTT again (this only enqueues a WebSocket state broadcast).

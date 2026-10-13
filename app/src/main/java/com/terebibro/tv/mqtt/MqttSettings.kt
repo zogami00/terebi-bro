@@ -17,7 +17,9 @@ data class MqttSettings(
     val tls: Boolean = false,
     val username: String = "",
     val password: String = "",
-    val baseTopic: String = ""
+    val baseTopic: String = "",
+    val discoveryEnabled: Boolean = DEFAULT_DISCOVERY_ENABLED,
+    val discoveryPrefix: String = DEFAULT_DISCOVERY_PREFIX
 ) {
 
     /** True when the client has everything it needs to attempt a connection. */
@@ -32,6 +34,12 @@ data class MqttSettings(
 
         /** TLS is off by default (plain `tcp://`). */
         const val DEFAULT_TLS = false
+
+        /** Home Assistant MQTT Discovery is on by default (only meaningful when MQTT is on). */
+        const val DEFAULT_DISCOVERY_ENABLED = true
+
+        /** The conventional Home Assistant discovery prefix. */
+        const val DEFAULT_DISCOVERY_PREFIX = "homeassistant"
     }
 }
 
@@ -48,5 +56,7 @@ data class MqttUpdate(
     val tls: Boolean? = null,
     val username: String? = null,
     val password: String? = null,
-    val baseTopic: String? = null
+    val baseTopic: String? = null,
+    val discoveryEnabled: Boolean? = null,
+    val discoveryPrefix: String? = null
 )
