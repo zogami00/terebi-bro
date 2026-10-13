@@ -190,7 +190,7 @@ object MqttDiscovery {
             deviceClass: String? = null,
             category: String? = null
         ): Entity {
-            val cfg = common(objectId)
+            val cfg = common(Component.SENSOR, objectId)
             cfg.put("name", name)
             cfg.put("state_topic", stateTopic)
             cfg.put("value_template", valueTemplate)
@@ -209,7 +209,7 @@ object MqttDiscovery {
             payloadOff: String,
             deviceClass: String? = null
         ): Entity {
-            val cfg = common(objectId)
+            val cfg = common(Component.BINARY_SENSOR, objectId)
             cfg.put("name", name)
             cfg.put("state_topic", stateTopic)
             valueTemplate?.let { cfg.put("value_template", it) }
@@ -220,7 +220,7 @@ object MqttDiscovery {
         }
 
         fun button(objectId: String, name: String, commandTopic: String, action: String): Entity {
-            val cfg = common(objectId)
+            val cfg = common(Component.BUTTON, objectId)
             cfg.put("name", name)
             cfg.put("command_topic", commandTopic)
             cfg.put("payload_press", JSONObject().put("action", action).toString())
@@ -235,7 +235,7 @@ object MqttDiscovery {
             stateTopic: String? = null,
             valueTemplate: String? = null
         ): Entity {
-            val cfg = common(objectId)
+            val cfg = common(Component.TEXT, objectId)
             cfg.put("name", name)
             cfg.put("command_topic", commandTopic)
             cfg.put("command_template", commandTemplate)
@@ -245,8 +245,18 @@ object MqttDiscovery {
             return Entity(Component.TEXT, objectId, cfg)
         }
 
-        /** The fields every payload must carry: unique id, availability and the device block. */
-        private fun common(objectId: String): JSONObject {
+        /**
+         * The fields every payload must carry: the discovery `platform`, the
+         * unique id, availability and the device block.
+         *
+         * [component] is the single source of truth for the component: its
+         * `wire` name is written as the required discovery `platform` key here
+         * and is also the topic segment used by [topic], so the two cannot
+         * drift. Home Assistant drops any auto-discovery config that omits
+         * `platform` for the newer domains (button/binary_sensor/text), which
+         * is why the key is mandatory here.
+         */
+        private fun common(component: Component, objectId: String): JSONObject {
             val device = JSONObject()
                 .put("identifiers", JSONArray().put(nodeId(deviceId)))
                 .put("name", deviceName)
@@ -254,6 +264,7 @@ object MqttDiscovery {
                 .put("model", MODEL)
                 .put("sw_version", appVersion)
             return JSONObject()
+                .put("platform", component.wire)
                 .put("unique_id", uniqueId(deviceId, objectId))
                 // Names entities relative to their device, so a second TV gets
                 // readable ids instead of HA-generated suffixes like `_2`.

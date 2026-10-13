@@ -69,6 +69,46 @@ class MqttDiscoveryTest {
     }
 
     // ---------------------------------------------------------------------
+    // The required discovery `platform` key
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `every config carries a platform equal to its discovery topic component`() {
+        for (e in entities()) {
+            val topic = MqttDiscovery.topic(prefix, deviceId, e)
+            // `homeassistant/<component>/<node>/<object>/config`
+            val componentSegment = topic.split("/")[1]
+            assertTrue(e.objectId, e.config.has("platform"))
+            assertEquals(e.objectId, componentSegment, e.config.getString("platform"))
+            // It is always derived from the component, never a second literal.
+            assertEquals(e.objectId, e.component.wire, e.config.getString("platform"))
+        }
+    }
+
+    @Test
+    fun `all four component types publish their own platform`() {
+        // Table-driven over the real entity set: every entity of each domain
+        // must carry the matching platform, and all four domains are present.
+        val byComponent = entities().groupBy { it.component }
+        for (component in MqttDiscovery.Component.entries) {
+            val group = byComponent[component].orEmpty()
+            assertTrue("no entities for ${component.wire}", group.isNotEmpty())
+            for (e in group) {
+                assertEquals(component.wire, e.config.getString("platform"))
+            }
+        }
+        assertEquals(
+            MqttDiscovery.Component.entries.toSet(),
+            byComponent.keys
+        )
+        // Each domain's wire name is exactly what HA expects.
+        assertEquals(
+            listOf("sensor", "binary_sensor", "button", "text"),
+            MqttDiscovery.Component.entries.map { it.wire }
+        )
+    }
+
+    // ---------------------------------------------------------------------
     // Prefix change: stale configs are cleared
     // ---------------------------------------------------------------------
 
