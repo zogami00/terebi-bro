@@ -29,7 +29,7 @@ What the first release ships, and what was intentionally left out.
   `/api/device`, `/api/nav/open`, `/api/home`, `/api/nav/{home,back,forward,reload,stop}`,
   `/api/webview/{restart,clear-cache,clear-site-data}`, `/api/display`,
   `/api/dpad`, `/api/settings/device-name`, `/api/settings/port`,
-  `/api/settings/networks`.
+  `/api/settings/networks`, `/api/settings/mqtt`.
 - WebSocket at `/ws` with 250 ms-coalesced state broadcasts, heartbeat and
   in-band authentication.
 - Debug-only (`BuildConfig.DEBUG`) emulator affordance: the server also binds
@@ -57,7 +57,7 @@ What the first release ships, and what was intentionally left out.
 **TV-side**
 
 - First-run setup overlay showing device name, both addresses and the PIN,
-  reachable again with the remote's MENU / INFO button.
+  reachable again from the on-device menu (remote MENU / INFO → **Settings**).
 - Device diagnostics (manufacturer, model, Android/SDK, app version, WebView
   provider/version, IP, port, uptime) on the TV and via `/api/device`.
 
@@ -120,12 +120,58 @@ actually requires. The blast radius is bounded deliberately:
   setup overlay lists recently-blocked client networks (in memory only, never
   persisted or logged) with a one-press allow of the containing /24.
 
+## Extension: on-device menu (§15) and Enter URL (§16)
+
+Spec §15 (a native long-press-Back menu) and §16 (Enter URL from the TV) were
+originally deferred; they are now implemented.
+
+- A **long press of Back** (hold ≥ 700 ms, where the hold is observable:
+  **API ≤ 32**) or the remote's **MENU / INFO** key opens an on-device menu with
+  **Home**, **Reload**, **Refresh WebView**, **Enter URL**, **Settings**,
+  **Device information** and **Exit App**. **Back closes the menu** without
+  acting on any item, and the menu does not trap focus.
+- **Enter URL** opens a dialog (text field + **Open** / **Open + Set as Home** /
+  **Cancel**) usable with both a D-pad/keyboard and touch. It validates through
+  the existing `UrlValidator` (a missing scheme is upgraded to `https://`, a
+  non-http(s) scheme is refused with an inline error).
+- This **changes existing behaviour**: long-press Back used to **exit**; it now
+  opens the menu, and exiting moved into the menu (**Exit App**). The **Exit
+  App** button on the setup page is kept. MENU/INFO used to toggle the setup
+  overlay directly; it now opens the menu, and the setup overlay is the
+  **Settings** menu item.
+- The Back ladder gains two rungs at the front (close the menu, close the
+  device-information overlay); the existing ladder (close overlay → close
+  fullscreen → history → home → setup page) is otherwise unchanged.
+
+## Extension: MQTT control
+
+The spec has no MQTT surface; this is a new, **off-by-default** extension.
+When enabled, the TV publishes a retained `availability` (`online`/`offline`,
+with a retained last will) and a retained `status` (the same state object as the
+REST/WebSocket state, built from the one state-change path), subscribes to
+`command` at QoS 1 and publishes `command/result`. Actions: `open`, `set-home`,
+`home`, `back`, `forward`, `reload`, `stop`, `restart-webview`, `clear-cache`,
+`clear-site-data`. TLS and username/password are supported.
+
+**Auth model, stated plainly.** Broker access **is** control: there is no
+controller-token check on MQTT commands, so anyone who can publish to the
+command topic can drive the tablet. The broker credentials (and its topic ACLs)
+are the only gate. The feature defaults to off for exactly this reason.
+
+The MQTT client (Eclipse Paho, plain Java — no Android service, no Netty)
+reconnects with exponential backoff capped at 60 s, resubscribes and
+re-publishes the retained status on every reconnect, uses a stable
+device-derived client id, never logs the password or the username, never places
+a secret in a payload, and runs entirely off the UI thread. An unreachable
+broker leaves the control server and the WebView unaffected.
+
+Two additive REST routes back it: `GET`/`POST /api/settings/mqtt` (auth), and a
+read-only `mqttConnected` in `GET /api/device`. A `POST` is validated as a whole
+— a bad value is `400 bad_request` naming the field and nothing is written. The
+password is never returned by a `GET` (a boolean `mqttPasswordSet` is).
+
 ## Deliberately deferred
 
-- **Native long-press-Back menu (§15)** and **Enter URL from TV (§16).** The
-  TV-side browser menu and on-TV URL/keyboard entry are not implemented. The
-  setup overlay is reachable via the remote's MENU / INFO key instead, and URL
-  entry is done from the web controller.
 - **URL allowlist / restricted mode (§20).** V1 runs in open mode only; the
   `allowArbitraryUrls` / `allowedDomains` settings are not implemented.
 - **Boot auto-start (§8).** No `BOOT_COMPLETED` receiver / auto-start setting.
@@ -139,12 +185,13 @@ actually requires. The blast radius is bounded deliberately:
 
 ## Verification
 
-Compiled, JVM-unit-tested (`150` tests), linted (`0` errors) and built as a
+Compiled, JVM-unit-tested (`190` tests), linted (`0` errors) and built as a
 signed release.
 
 **Verified end-to-end by the maintainer on the reference Android 9 (API 28)
 device using the shipped `v0.2.0` release APK**, installed from the published
-GitHub release: the Back ladder, long-press Back exit, the Exit App button,
+GitHub release: the Back ladder, long-press Back opening the on-device menu, the
+Exit App button,
 D-pad focus traversal inside a real site, controller pairing from a second
 device with the 6-digit PIN, live WebSocket status updates, rendering of a real
 Home URL (Chromium 138), the controller's on-screen D-pad driving TV focus, the

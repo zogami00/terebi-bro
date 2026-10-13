@@ -21,6 +21,7 @@
   var pingTimer = null;
   var bannerTimer = null;
   var networks = [];
+  var mqttPasswordSet = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -190,6 +191,7 @@
       if (message.state) updateState(message.state);
       refreshDevice();
       refreshNetworks();
+      refreshMqtt();
     } else if (message.type === 'state') {
       updateState(message.state);
     } else if (message.type === 'event') {
@@ -290,6 +292,7 @@
       setText('infoWebView', d.webViewVersion);
       setText('infoIp', d.ip);
       setText('infoPort', d.port);
+      setText('infoMqtt', d.mqttConnected ? 'connected' : 'disconnected');
       setText('infoPaired', d.pairedCount);
       setWebViewWarning(d.webViewOutdated, d.webViewVersion);
     });
@@ -410,6 +413,89 @@
     });
   }
 
+  /* --------------------------------------------------------------------- mqtt */
+
+  /* Connection state line. Server-provided values only ever reach the DOM
+     through textContent. */
+  function setMqttStatus(data) {
+    var el = $('mqttState');
+    if (!el) return;
+    if (!data || data.enabled !== true) {
+      el.textContent = 'MQTT: disabled';
+      return;
+    }
+    var state = data.mqttState || (data.mqttConnected ? 'connected' : 'disconnected');
+    var text = 'MQTT: ' + state;
+    if (!data.mqttConnected && data.mqttLastError) text += ' \u2014 ' + data.mqttLastError;
+    el.textContent = text;
+  }
+
+  function refreshMqtt() {
+    api('GET', '/api/settings/mqtt', undefined).then(function (result) {
+      if (result.status !== 200 || !result.json) return;
+      var d = result.json;
+      mqttPasswordSet = !!d.mqttPasswordSet;
+      setValueIfIdle('mqttHostInput', d.host);
+      setValueIfIdle('mqttPortInput', d.port);
+      setValueIfIdle('mqttUsernameInput', d.username);
+      setValueIfIdle('mqttBaseTopicInput', d.baseTopic);
+      var enabled = $('mqttEnabledToggle');
+      if (enabled && document.activeElement !== enabled) enabled.checked = !!d.enabled;
+      var tls = $('mqttTlsToggle');
+      if (tls && document.activeElement !== tls) tls.checked = !!d.tls;
+      var pw = $('mqttPasswordInput');
+      if (pw) pw.placeholder = mqttPasswordSet ? 'leave blank to keep' : 'no password set';
+      setMqttStatus(d);
+    });
+  }
+
+  function saveMqtt() {
+    var error = $('mqttError');
+    error.textContent = '';
+    var enabled = $('mqttEnabledToggle').checked;
+    var host = $('mqttHostInput').value.trim();
+    if (enabled && !host) {
+      error.textContent = 'A broker host is required when MQTT is enabled.';
+      return;
+    }
+    var port = parseInt($('mqttPortInput').value, 10);
+    if (!port || port < 1 || port > 65535) {
+      error.textContent = 'Port must be between 1 and 65535.';
+      return;
+    }
+    var body = {
+      enabled: enabled,
+      host: host,
+      port: port,
+      tls: $('mqttTlsToggle').checked,
+      username: $('mqttUsernameInput').value,
+      baseTopic: $('mqttBaseTopicInput').value.trim()
+    };
+    // Password is write-only: send it only when the field is non-empty so an
+    // untouched field never clears a stored password.
+    var password = $('mqttPasswordInput').value;
+    if (password !== '') body.password = password;
+    api('POST', '/api/settings/mqtt', body).then(function (result) {
+      if (result.status === 200 && result.json) {
+        $('mqttPasswordInput').value = '';
+        refreshMqtt();
+      } else {
+        error.textContent = apiError(result);
+      }
+    });
+  }
+
+  function clearMqttPassword() {
+    api('POST', '/api/settings/mqtt', { password: '' }).then(function (result) {
+      if (result.status === 200) {
+        $('mqttPasswordInput').value = '';
+        refreshMqtt();
+      } else {
+        banner(apiError(result));
+      }
+    });
+  }
+
   /* ------------------------------------------------------------------ actions */
 
   function navigate(path, body, method) {
@@ -494,6 +580,9 @@
     $('fullscreenToggle').addEventListener('change', saveDisplay);
     $('keepAwakeToggle').addEventListener('change', saveDisplay);
 
+    $('saveMqtt').addEventListener('click', saveMqtt);
+    $('clearMqttPassword').addEventListener('click', clearMqttPassword);
+
     $('unpairButton').addEventListener('click', unpair);
   }
 
@@ -505,6 +594,7 @@
     connect();
     refreshDevice();
     refreshNetworks();
+    refreshMqtt();
     api('GET', '/api/state', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.state) updateState(result.json.state);
     });

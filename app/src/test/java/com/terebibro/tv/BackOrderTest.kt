@@ -119,4 +119,68 @@ class BackOrderTest {
     fun `zero-length hold is not a long press`() {
         assertFalse(BackOrder.isLongPress(1_000L, 1_000L, 700L))
     }
+
+    // ---------------------------------------------------------------------
+    // On-device menu and device-information rungs
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `an open menu is closed first`() {
+        assertEquals(
+            Action.CLOSE_MENU,
+            BackOrder.decision(
+                state(info = true, error = true, fullscreen = true, canGoBack = true)
+                    .copy(menuVisible = true)
+            )
+        )
+    }
+
+    @Test
+    fun `a visible device overlay is closed next`() {
+        assertEquals(
+            Action.CLOSE_DEVICE,
+            BackOrder.decision(
+                state(info = true, error = true, fullscreen = true, canGoBack = true)
+                    .copy(deviceInfoVisible = true)
+            )
+        )
+    }
+
+    @Test
+    fun `the menu outranks the device overlay and the setup overlay`() {
+        assertEquals(
+            Action.CLOSE_MENU,
+            BackOrder.decision(
+                state(info = true).copy(menuVisible = true, deviceInfoVisible = true)
+            )
+        )
+    }
+
+    @Test
+    fun `the new rungs join a total ladder`() {
+        val actions = listOf(
+            state(),
+            state(atHome = true),
+            state(info = true),
+            state(error = true),
+            state(fullscreen = true),
+            state(canGoBack = true),
+            state(atHome = false),
+            state().copy(menuVisible = true),
+            state().copy(deviceInfoVisible = true)
+        ).map { BackOrder.decision(it) }
+        assertEquals(
+            setOf(
+                Action.CLOSE_INFO,
+                Action.CLOSE_ERROR,
+                Action.HIDE_FULLSCREEN,
+                Action.GO_BACK,
+                Action.GO_HOME,
+                Action.SHOW_SETUP,
+                Action.CLOSE_MENU,
+                Action.CLOSE_DEVICE
+            ),
+            actions.toSet()
+        )
+    }
 }

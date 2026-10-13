@@ -21,6 +21,11 @@ LAN opens the bundled controller page and drives the TV browser.
   (for example an admin VLAN) can reach the pairing prompt.
 - Live state over WebSocket (current URL, title, loading, network, uptime).
 - Remote D-pad, navigation, browser management and settings.
+- On-device menu (long-press Back, or the remote's MENU/INFO key) with Home,
+  Reload, Refresh WebView, **Enter URL**, Settings, Device information and
+  Exit App — so the tablet can be driven without a second device.
+- Optional **MQTT control** (off by default): the TV can be driven from any MQTT
+  broker. See [MQTT control](#mqtt-control).
 - mDNS advertisement as `<deviceName>.local`, with an IP fallback.
 - Automatic retry screen when the page is unavailable.
 - WebView renderer crash recovery.
@@ -185,6 +190,10 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | Automatic retry | on |
 | Retry interval | 10 s |
 | Trusted client networks | none (own subnet only) |
+| MQTT | **off** |
+| MQTT broker port | 1883 |
+| MQTT TLS | off (plain `tcp://`) |
+| MQTT base topic | `terebibro/<deviceName>` |
 
 Changing the controller port persists the new value only after the bind is
 probed; an unavailable port is rejected with `409 port_unavailable` and the old
@@ -241,50 +250,74 @@ TV issues a fresh PIN at any time.
 
 ### Reaching the setup overlay with the TV remote
 
-Press the remote's **MENU** (or **INFO**) button to toggle the overlay.
-**Revoke all devices** is TV-only: it is deliberately not exposed over HTTP so
-one paired phone cannot kick out the others. The overlay is scrollable, so on a
-short display (e.g. a 720p TV) every button — including **Exit App** — stays
-reachable with the D-pad.
+Press the remote's **MENU** (or **INFO**) button to open the on-device menu, then
+choose **Settings** to open the setup / pairing overlay. (MENU/INFO used to
+toggle the overlay directly; it now opens the menu, and the overlay is a menu
+item.) **Revoke all devices** is TV-only: it is deliberately not exposed over
+HTTP so one paired phone cannot kick out the others. The overlay and the menu
+are both scrollable, so on a short display (e.g. a 720p TV) every button —
+including **Exit App** — stays reachable with the D-pad.
+
+## On-device menu and Enter URL
+
+The tablet can be driven without any phone, from the remote or by touch. Open
+the on-device **menu** with:
+
+- a **long press of Back** (hold ≥ 700 ms) — where the hold is observable, i.e.
+  **API ≤ 32** (the same `BackOrder.isLongPress` path the old long-press-to-exit
+  used), or
+- the remote's **MENU / INFO** button — on every API.
+
+The menu items are **Home**, **Reload**, **Refresh WebView** (the existing
+WebView restart), **Enter URL**, **Settings**, **Device information** and
+**Exit App**. **Back closes the menu** without acting on any item, and the menu
+never traps focus — a short Back press runs the normal Back ladder from wherever
+focus is.
+
+**Enter URL** opens a dialog with a text field and **Open**,
+**Open + Set as Home** and **Cancel**. It is fully usable with both a
+D-pad/keyboard and touch. The value goes through the same `UrlValidator` as the
+REST path: a missing scheme is upgraded to `https://`, and a non-http(s) scheme
+(`javascript:`, `data:`, `file:`, …) is refused with an inline error. On error
+the dialog stays open so the value can be corrected; on success it loads and,
+for **Open + Set as Home**, persists the Home URL.
 
 ### Back behaviour
 
 Back navigates. It walks a fixed ladder and every rung performs a real action —
 Back is always consumed and never exits the app by accident:
 
-1. info (setup) overlay open → close it
-2. error overlay open → close it
-3. HTML5 fullscreen video → exit the video
-4. WebView has history → navigate back
-5. not on the home page → load the home page
-6. **at the true root → open the setup / pairing page**
+1. on-device menu open → close it
+2. device-information overlay open → close it
+3. info (setup) overlay open → close it
+4. error overlay open → close it
+5. HTML5 fullscreen video → exit the video
+6. WebView has history → navigate back
+7. not on the home page → load the home page
+8. **at the true root → open the setup / pairing page**
 
-Exiting the kiosk is therefore always deliberate, never the side effect of one
-Back press, and there are two explicit ways to do it:
+Exiting the kiosk is now a deliberate **menu item** (**Exit App**), and the
+**Exit App** button on the setup page remains on every API. A long press of Back
+no longer exits: it opens the menu.
 
-- **Long-press Back** (hold ≥ 700 ms) — **API ≤ 32 only**.
-- **Exit App** on the setup page — **every API**. This is the exit path on
-  API 33+.
-
-Why the asymmetry: on **API 33+** the system is expected to route Back to the
-`OnBackInvokedCallback` rather than to `dispatchKeyEvent`, so the DOWN→UP hold
-duration would not be observable and long-press-to-exit would not be possible.
-That framework behaviour is reasoned from the platform's Back-dispatch design,
-not verified here on an API 33+ device, so the code does not rely on
-`dispatchKeyEvent` seeing the key on API 33+ — long-press-to-exit is offered on
-**API ≤ 32 only**, and the Exit App button is the universal path. On **API ≤ 32**
-the activity sees the key event and measures the hold from the event's own
-gesture start (`downTime`, which auto-repeat events do not shift, unlike
-`eventTime`), so it also works on keyboards and repeating remotes; some TV
-remotes never send repeats at all, so the duration is measured directly rather
-than by counting repeats. On both paths the callback/consumed event runs the same
-pure ladder (`BackOrder`), so Back at the root opens the setup page everywhere.
-The `android:enableOnBackInvokedCallback="true"` attribute is required for the
-callback to be delivered on API 33–35 (on API 36 it defaults to true; below
-API 33 it is ignored).
+Why the long press is API ≤ 32 only: on **API 33+** the system is expected to
+route Back to the `OnBackInvokedCallback` rather than to `dispatchKeyEvent`, so
+the DOWN→UP hold duration would not be observable. That framework behaviour is
+reasoned from the platform's Back-dispatch design, not verified here on an
+API 33+ device, so the code does not rely on `dispatchKeyEvent` seeing the key
+there. MENU/INFO (and the menu itself, and the Exit App item in it) work on
+every API. On **API ≤ 32** the activity sees the key event and measures the hold
+from the event's own gesture start (`downTime`, which auto-repeat events do not
+shift, unlike `eventTime`), so it also works on keyboards and repeating remotes;
+some TV remotes never send repeats at all, so the duration is measured directly
+rather than by counting repeats. On both paths the callback/consumed event runs
+the same pure ladder (`BackOrder`), so Back at the root opens the setup page
+everywhere. The `android:enableOnBackInvokedCallback="true"` attribute is
+required for the callback to be delivered on API 33–35 (on API 36 it defaults to
+true; below API 33 it is ignored).
 
 `700 ms` is a reasoned default for the long-press threshold rather than a value
-measured on hardware, though the Back ladder and the hold-to-exit behaviour were
+measured on hardware, though the Back ladder and the hold behaviour were
 verified end-to-end by the maintainer on the reference Android 9 device (see
 [Verification status](#verification-status)).
 
@@ -357,6 +390,76 @@ never written to storage and the addresses are never written to the log; the
 on-screen TV list is the only place an address appears. Loopback peers and the
 TV's own address are never recorded, and only well-formed IPv4 peers are
 listed.
+
+## MQTT control
+
+Terebi Bro can optionally expose itself on an MQTT broker, so the tablet can be
+driven by any home-automation system. **It is OFF by default** and must be
+enabled explicitly, because — as stated in plain terms below — **broker access
+equals control**.
+
+The setting is managed from the controller's **MQTT** panel and via
+`GET`/`POST /api/settings/mqtt`; every field is editable at runtime and
+persisted (`mqttEnabled`, `mqttHost`, `mqttPort` default **1883**, `mqttTls`
+default **off**, `mqttUsername`, `mqttPassword`, `mqttBaseTopic` default
+`terebibro/<mdnsName>`). TLS is supported: with `mqttTls` on, the client connects
+over `ssl://`, otherwise `tcp://`. The MQTT client is a plain-Java client
+(Eclipse Paho) — no Android service and no Netty.
+
+### Auth model — the broker is the only gate
+
+**Anyone who can publish to the command topic can drive the tablet.** There is
+no controller-token check on MQTT commands: the broker's own authentication
+(and its topic ACLs, if configured) is the *only* gate. A broker that lets a
+client publish to `<base>/command` lets that client open URLs, change the home
+page, restart the WebView and clear site data on the TV. Treat the MQTT
+credentials — and the broker's topic permissions — with the same care as the
+TV's pairing tokens, and keep MQTT disabled unless you actually want this.
+
+The MQTT password and username are never logged, and no secret is ever placed in
+a published payload.
+
+### Topics and payloads (fixed contract)
+
+`<base>` is `mqttBaseTopic`, defaulting to `terebibro/<mdnsName>`.
+
+| Topic | Direction | QoS / retained | Payload |
+| --- | --- | --- | --- |
+| `<base>/availability` | publish | QoS 1, **retained** | `online` on connect. The **last will is `offline`, retained**, so a crash or a network loss reports `offline`; a clean shutdown also publishes `offline`. |
+| `<base>/status` | publish | QoS 1, **retained** | JSON: the same state object as `GET /api/state` / the WebSocket `state` message (which already includes `ip`, `port`, `webViewVersion`, `appVersion` and `uptimeMs`). Republished on every change and again on each reconnect. |
+| `<base>/command` | subscribe | QoS 1 | JSON `{"action":"...", ..., "id":"optional"}`. The payload is bounded to **4096 bytes**; a larger one is refused with `payload_too_large` before it is decoded. **Retained messages are ignored** (a retained command would otherwise re-run on every reconnect and reboot) — publish commands with `retain=false`. |
+| `<base>/command/result` | publish | QoS 1, not retained | `{"id":<id>,"ok":true}` or `{"id":<id>,"ok":false,"error":{"code":"...","message":"..."}}` |
+
+Actions: `open` (needs `url`), `set-home` (needs `url`), `home`, `back`,
+`forward`, `reload`, `stop`, `restart-webview`, `clear-cache`,
+`clear-site-data`. A URL is validated with the same `UrlValidator` the REST path
+uses, so `javascript:`/`data:` and the like are refused (the result reports
+`invalid_url`). An unknown action name is echoed back truncated to 32
+characters, so the result payload stays bounded.
+
+Example:
+
+```jsonc
+// publish to terebibro/living-room-tv/command
+{"action":"open","url":"https://example.com/live","id":"42"}
+// -> terebibro/living-room-tv/command/result
+{"id":"42","ok":true}
+```
+
+### Robustness
+
+- The client connects on start when enabled, and on a drop reconnects with
+  **exponential backoff capped at 60 s**, resubscribing to `command` and
+  re-publishing the retained `status` on every reconnect.
+- The client id is **stable**, derived from the device (`terebibro-<device>`),
+  so a reconnect is not seen as a new device. A clean session is used and the
+  subscription is re-established on each connect.
+- All MQTT work runs on its own daemon thread; commands are dispatched through
+  the same main-thread path as the REST API. MQTT never blocks the UI.
+- **If the broker is unreachable the app is entirely unaffected**: the control
+  server, the WebView and mDNS keep working. The controller shows the
+  connection state (connected / disconnected / error and the last error), and
+  `GET /api/device` reports `mqttConnected`.
 
 ## Testing the controller on an emulator
 
@@ -455,14 +558,16 @@ bodies and WebSocket `auth` messages are never logged.
 Validated by building and by JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 150 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 190 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
   limiter, the bound-port write-back rule, the Back-behaviour ladder (including
-  the root → setup-page rung) and the Home-URL comparison used by Back handling,
+  the root → setup-page rung and the new on-device-menu / device-information
+  rungs) and the Home-URL comparison used by Back handling,
   the long-press hold-decision helper (threshold boundaries, a missing gesture
   start and a malformed negative delta), strict JSON parsing (including the
-  opt-in string-array path), request-body
+  opt-in string-array path and the new optional string/int accessors),
+  request-body
   framing rules, the mDNS name
   sanitiser, the WebSocket frame-size cap, URL validation, subnet membership, the
   debug-only loopback/localhost peer & Host policy, the CIDR parser and list
@@ -471,8 +576,13 @@ Validated by building and by JVM unit tests:
   membership boundaries, de-duplication and the 16-entry cap), the
   bounded recently-blocked peer list (bound, de-duplication, recency, clear),
   the extra-network peer policy, the listener bind-host
-  choice, and the advisory WebView-version check with its unknown-input
-  safety).
+  choice, the advisory WebView-version check with its unknown-input
+  safety, and the MQTT pure pieces — topic building and device-name sanitising,
+  the strict command parser (valid actions plus every failure mode: unknown
+  action, missing `url`, invalid URL and malformed JSON), the status payload
+  (built from the shared state object and carrying the required device fields),
+  the settings validator (bounded host/port/topic, field-naming and no partial
+  write) and the capped reconnect backoff).
 - `lintDebug` runs (0 errors, `NewApi`-clean after lowering `minSdk`).
 - `assembleRelease` builds and produces a signed `app-release.apk`.
 
@@ -482,7 +592,7 @@ GitHub release.** Every path below passed:
 
 - **Back ladder** — closes the overlays, steps through history, loads the home
   page, and at the root opens the setup page rather than exiting.
-- **Long-press Back exit** — holding Back exits to the launcher (the
+- **Long-press Back menu** — holding Back opens the on-device menu (the
   API ≤ 32 path).
 - **Exit App button** — exits the app.
 - **D-pad focus traversal** — the remote moves focus correctly inside a real

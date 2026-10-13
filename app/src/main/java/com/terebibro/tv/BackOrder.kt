@@ -6,16 +6,18 @@ package com.terebibro.tv
  * (no Android framework types here).
  *
  * The first matching rule wins, in this order:
- * 1. info overlay open   -> close it
- * 2. error overlay open  -> close it
- * 3. HTML5 fullscreen    -> hide the video view
- * 4. WebView can go back -> navigate back
- * 5. not at the home page -> load home
- * 6. at the true root    -> open the setup / pairing page
+ * 1. on-device menu open -> close it
+ * 2. device-information overlay open -> close it
+ * 3. info overlay open   -> close it
+ * 4. error overlay open  -> close it
+ * 5. HTML5 fullscreen    -> hide the video view
+ * 6. WebView can go back -> navigate back
+ * 7. not at the home page -> load home
+ * 8. at the true root    -> open the setup / pairing page
  *
  * There is no "exit" rung: Back always has something to do, so the ladder is
- * always handled. Exiting the app is deliberate and happens elsewhere (a
- * long-press of Back on API < 33, or the Exit App button on the setup page).
+ * always handled. Exiting the app is deliberate and happens elsewhere (the Exit
+ * App item in the on-device menu, or the Exit App button on the setup page).
  */
 object BackOrder {
 
@@ -25,10 +27,18 @@ object BackOrder {
         val errorOverlayVisible: Boolean,
         val fullscreenVisible: Boolean,
         val canGoBack: Boolean,
-        val atHome: Boolean
+        val atHome: Boolean,
+        /** The on-device browser menu (long-press Back, or the remote's MENU/INFO key). */
+        val menuVisible: Boolean = false,
+        /** The read-only device-information overlay opened from the menu. */
+        val deviceInfoVisible: Boolean = false
     )
 
     enum class Action {
+        /** Close the on-device menu without acting on any item. */
+        CLOSE_MENU,
+        /** Close the device-information overlay. */
+        CLOSE_DEVICE,
         CLOSE_INFO,
         CLOSE_ERROR,
         HIDE_FULLSCREEN,
@@ -41,6 +51,8 @@ object BackOrder {
 
     /** The single decision shared by the activity's handler and its tests. */
     fun decision(state: BackState): Action = when {
+        state.menuVisible -> Action.CLOSE_MENU
+        state.deviceInfoVisible -> Action.CLOSE_DEVICE
         state.infoOverlayVisible -> Action.CLOSE_INFO
         state.errorOverlayVisible -> Action.CLOSE_ERROR
         state.fullscreenVisible -> Action.HIDE_FULLSCREEN

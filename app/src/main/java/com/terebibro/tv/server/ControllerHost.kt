@@ -1,5 +1,6 @@
 package com.terebibro.tv.server
 
+import com.terebibro.tv.mqtt.MqttStatus
 import com.terebibro.tv.web.BrowserState
 
 /**
@@ -39,4 +40,10 @@ interface ControllerHost {
     fun setDeviceName(name: String): ApiResult
 
     fun setControllerPort(port: Int): ApiResult
+
+    /** Read-only MQTT connection status for `GET /api/settings/mqtt` and `/api/device`. */
+    fun mqttStatus(): MqttStatus
+
+    /** Called after the persisted MQTT settings change, so the client reconnects. */
+    fun onMqttSettingsChanged()
 }

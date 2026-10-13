@@ -230,6 +230,26 @@ object Json {
         return value.value
     }
 
+    /**
+     * Throws when the key is present but not a string; a missing key reads as
+     * null. Used by the additive settings routes, where each field is optional
+     * and a `null` means "leave unchanged".
+     */
+    fun optionalString(values: Map<String, Value>, key: String, maxLength: Int): String? {
+        val raw = values[key] ?: return null
+        val value = raw as? Value.Str ?: throw BadJson("wrong_type:$key")
+        if (value.value.length > maxLength) throw BadJson("too_long:$key")
+        return value.value
+    }
+
+    /** Throws when the key is present but not a whole number; a missing key reads as null. */
+    fun optionalInt(values: Map<String, Value>, key: String): Int? {
+        val raw = values[key] ?: return null
+        val value = raw as? Value.Num ?: throw BadJson("wrong_type:$key")
+        if (value.value % 1.0 != 0.0) throw BadJson("not_integer:$key")
+        return value.value.toInt()
+    }
+
     fun requireInt(values: Map<String, Value>, key: String): Int {
         val value = values[key] as? Value.Num ?: throw BadJson("missing_or_wrong_type:$key")
         if (value.value % 1.0 != 0.0) throw BadJson("not_integer:$key")

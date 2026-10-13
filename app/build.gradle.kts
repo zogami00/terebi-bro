@@ -128,5 +128,15 @@ dependencies {
     implementation("org.jmdns:jmdns:3.6.3")
     implementation("org.slf4j:slf4j-nop:2.0.7")
 
+    // MQTT client: plain Java, no Android service and no Netty. Used only when
+    // the opt-in MQTT setting is enabled; the app is unaffected otherwise.
+    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+
     testImplementation("junit:junit:4.13.2")
+
+    // Unit tests run on the JVM, where Android's `org.json` stubs throw
+    // "not mocked". The real implementation is provided on the test classpath
+    // only, so `StateJson` and the MQTT status payload built from it can be
+    // exercised directly. It is not shipped in the app.
+    testImplementation("org.json:json:20240303")
 }

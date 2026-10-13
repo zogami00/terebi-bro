@@ -1,6 +1,7 @@
 package com.terebibro.tv
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
@@ -8,12 +9,14 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -25,6 +28,11 @@ import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
+import com.terebibro.tv.mqtt.MqttAction
+import com.terebibro.tv.mqtt.MqttCommand
+import com.terebibro.tv.mqtt.MqttManager
+import com.terebibro.tv.mqtt.MqttStatus
+import com.terebibro.tv.mqtt.MqttTopics
 import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.net.LocalNetwork
 import com.terebibro.tv.server.ApiResult
@@ -48,9 +56,10 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Full screen, TV-first WebView host plus the embedded controller server,
- * mDNS advertisement and the TV-side setup / error overlays.
+ * mDNS advertisement, the optional MQTT client and the TV-side setup / error /
+ * menu overlays.
  */
-class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
+class MainActivity : Activity(), WebViewController.Listener, ControllerHost, MqttManager.Dispatcher {
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var webViewContainer: FrameLayout
@@ -74,6 +83,19 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var errorRetryButton: Button
     private lateinit var errorHomeButton: Button
 
+    private lateinit var menuOverlay: ScrollView
+    private lateinit var menuHomeButton: Button
+    private lateinit var menuReloadButton: Button
+    private lateinit var menuRefreshButton: Button
+    private lateinit var menuEnterUrlButton: Button
+    private lateinit var menuSettingsButton: Button
+    private lateinit var menuDeviceButton: Button
+    private lateinit var menuExitButton: Button
+
+    private lateinit var deviceOverlay: LinearLayout
+    private lateinit var deviceInfoText: TextView
+    private lateinit var deviceCloseButton: Button
+
     private lateinit var config: ConfigStore
     private lateinit var deviceInfo: DeviceInfo
     private lateinit var localNetwork: LocalNetwork
@@ -83,6 +105,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var apiRoutes: ApiRoutes
     private lateinit var controllerServer: ControllerServer
     private lateinit var mdns: MdnsAdvertiser
+    private lateinit var mqttManager: MqttManager
 
     private val seq = AtomicLong(0)
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -94,8 +117,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /**
-     * Hold duration that turns a Back press into a deliberate exit. A long
-     * press is detected from the gesture's own DOWN->UP elapsed time rather
+     * Hold duration that turns a Back press into opening the on-device menu. A
+     * long press is detected from the gesture's own DOWN->UP elapsed time rather
      * than by counting repeats, so it also works on remotes that never send
      * repeat events. Only consulted on API < 33 (see [BackOrder.isLongPress]
      * and [dispatchKeyEvent]).
@@ -154,7 +177,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                     // have moved it, and the SRV record would otherwise keep the
                     // old port until the next network or device-name change.
                     readvertise()
-                    wsHub.broadcastState()
+                    broadcastState()
                 }
             }
         )
@@ -171,10 +194,23 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 // one mDNS was started with; re-advertise the port actually
                 // serving so the SRV record does not keep the old one.
                 readvertise()
-                wsHub.broadcastState()
+                broadcastState()
             }
         }
         mdns = MdnsAdvertiser(this, config)
+
+        mqttManager = MqttManager(
+            settingsProvider = { config.mqttSettings },
+            clientIdProvider = { MqttTopics.clientId(config.mdnsName) },
+            dispatcher = this,
+            stateProvider = { buildState() },
+            onStatusChanged = {
+                // Surface connect/disconnect in the controller without touching
+                // MQTT again (this only enqueues a WebSocket state broadcast).
+                wsHub.broadcastState()
+            }
+        )
+        mqttManager.start()
 
         io.execute {
             controllerServer.rebind()
@@ -188,7 +224,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         } else {
             showInfoOverlay(issueNewPin = true)
         }
-        wsHub.broadcastState()
+        broadcastState()
     }
 
     override fun onResume() {
@@ -236,6 +272,13 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             } catch (ignored: Exception) {
                 // ignore
             }
+            try {
+                // Publishes a retained `offline` (so a crash is not reported as
+                // still-online) and then disconnects.
+                if (::mqttManager.isInitialized) mqttManager.stop()
+            } catch (ignored: Exception) {
+                // ignore
+            }
         }, "terebi-shutdown").apply { isDaemon = true }.start()
         io.shutdownNow()
         super.onDestroy()
@@ -263,6 +306,17 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         errorCountdown = findViewById(R.id.error_countdown)
         errorRetryButton = findViewById(R.id.error_retry_button)
         errorHomeButton = findViewById(R.id.error_home_button)
+        menuOverlay = findViewById(R.id.menu_overlay)
+        menuHomeButton = findViewById(R.id.menu_home)
+        menuReloadButton = findViewById(R.id.menu_reload)
+        menuRefreshButton = findViewById(R.id.menu_refresh_webview)
+        menuEnterUrlButton = findViewById(R.id.menu_enter_url)
+        menuSettingsButton = findViewById(R.id.menu_settings)
+        menuDeviceButton = findViewById(R.id.menu_device_info)
+        menuExitButton = findViewById(R.id.menu_exit)
+        deviceOverlay = findViewById(R.id.device_overlay)
+        deviceInfoText = findViewById(R.id.device_info_text)
+        deviceCloseButton = findViewById(R.id.device_close)
 
         infoPairButton.setOnClickListener {
             auth.issuePin()
@@ -287,6 +341,27 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             hideErrorOverlay()
             webViewController.goHome(config.homeUrl)
         }
+
+        menuHomeButton.setOnClickListener {
+            hideMenu()
+            webViewController.goHome(config.homeUrl)
+        }
+        menuReloadButton.setOnClickListener {
+            hideMenu()
+            webViewController.reload()
+        }
+        menuRefreshButton.setOnClickListener {
+            hideMenu()
+            restartWebView()
+        }
+        menuEnterUrlButton.setOnClickListener { showEnterUrlDialog() }
+        menuSettingsButton.setOnClickListener {
+            hideMenu()
+            showInfoOverlay(issueNewPin = auth.currentPin() == null)
+        }
+        menuDeviceButton.setOnClickListener { showDeviceOverlay() }
+        menuExitButton.setOnClickListener { exitApp() }
+        deviceCloseButton.setOnClickListener { hideDeviceOverlay() }
     }
 
     // ---------------------------------------------------------------------
@@ -304,14 +379,6 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         auth.clearPin()
         infoOverlay.visibility = View.GONE
         webViewController.requestWebFocus()
-    }
-
-    private fun toggleInfoOverlay() {
-        if (infoOverlay.visibility == View.VISIBLE) {
-            hideInfoOverlay()
-        } else {
-            showInfoOverlay(issueNewPin = auth.currentPin() == null)
-        }
     }
 
     private fun updateInfoOverlay() {
@@ -409,13 +476,13 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         config.extraClientNetworks = (current + cidr).distinct()
         // The peer is now admitted, so the bootstrap list has served its purpose.
         auth.clearBlockedPeers()
-        wsHub.broadcastState()
+        broadcastState()
         updateInfoOverlay()
     }
 
     private fun removeNetwork(cidr: String) {
         config.extraClientNetworks = config.extraClientNetworks.filterNot { it == cidr }
-        wsHub.broadcastState()
+        broadcastState()
         updateInfoOverlay()
     }
 
@@ -463,6 +530,114 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         retryRemaining = config.retryIntervalSec
         webViewController.reload()
         scheduleRetry()
+    }
+
+    // ---------------------------------------------------------------------
+    // On-device menu, device information and Enter URL
+    // ---------------------------------------------------------------------
+
+    /**
+     * The single state-change fan-out. Both the WebSocket broadcast and (when
+     * enabled) the retained MQTT `status` publish hang off this one path, so
+     * MQTT can never become a second source of truth.
+     */
+    private fun broadcastState() {
+        wsHub.broadcastState()
+        if (::mqttManager.isInitialized) mqttManager.publishStatus()
+    }
+
+    /**
+     * Opens the on-device menu. It replaces the old long-press-to-exit and the
+     * MENU/INFO overlay toggle; the setup / pairing page is reachable from it
+     * via **Settings**, and exiting is now a deliberate menu item.
+     */
+    private fun showMenu() {
+        // The menu is the top-level TV surface; do not stack it over the setup
+        // overlay. (Settings re-opens the setup overlay.)
+        if (infoOverlay.visibility == View.VISIBLE) hideInfoOverlay()
+        // device_overlay is declared after menu_overlay, so it wins z-order: if
+        // it is visible the menu would be focused but invisible and the next
+        // Back would appear to do nothing. Leave fullscreen HTML5 video first
+        // too, since its custom view is appended above every overlay.
+        if (customView != null) hideCustomView()
+        if (deviceOverlay.visibility == View.VISIBLE) hideDeviceOverlay()
+        menuOverlay.visibility = View.VISIBLE
+        menuHomeButton.requestFocus()
+    }
+
+    private fun hideMenu() {
+        menuOverlay.visibility = View.GONE
+        webViewController.requestWebFocus()
+    }
+
+    private fun showDeviceOverlay() {
+        hideMenu()
+        val webView = deviceInfo.webViewInfo()
+        val info = localNetwork.current()
+        deviceInfoText.text = buildString {
+            appendLine("Device name: ${config.deviceName}")
+            appendLine("App version: ${deviceInfo.appVersion}")
+            appendLine("Android: ${deviceInfo.androidVersion} (API ${deviceInfo.sdkInt})")
+            appendLine("WebView: ${webView.provider} ${webView.version}")
+            appendLine("IP: ${info?.ip ?: "unavailable"}")
+            appendLine("Port: ${effectiveControllerPort()}")
+            appendLine("Uptime: ${deviceInfo.uptimeMs / 1000} s")
+        }
+        deviceOverlay.visibility = View.VISIBLE
+        deviceCloseButton.requestFocus()
+    }
+
+    private fun hideDeviceOverlay() {
+        deviceOverlay.visibility = View.GONE
+        webViewController.requestWebFocus()
+    }
+
+    /**
+     * Enter URL dialog (spec §16). Works with both touch and a D-pad/keyboard:
+     * the field is a normal focusable `EditText` and the three actions are
+     * focusable buttons. The URL goes through [UrlValidator] via
+     * [WebViewController.navigate] (a missing scheme is upgraded to https, and
+     * a non-http(s) scheme is refused), so it behaves exactly like the REST
+     * path. The dialog stays open with an inline error until the URL is valid.
+     */
+    private fun showEnterUrlDialog() {
+        hideMenu()
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            hint = "https://example.com"
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.enter_url_title)
+            .setView(input)
+            .setPositiveButton(R.string.open, null)
+            .setNeutralButton(R.string.open_set_home, null)
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                submitEnteredUrl(dialog, input, setHome = false)
+            }
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                submitEnteredUrl(dialog, input, setHome = true)
+            }
+        }
+        dialog.setOnDismissListener { webViewController.requestWebFocus() }
+        dialog.show()
+    }
+
+    private fun submitEnteredUrl(dialog: AlertDialog, input: EditText, setHome: Boolean) {
+        when (val outcome = webViewController.navigate(input.text.toString())) {
+            is WebViewController.Outcome.Ok -> {
+                if (setHome) config.homeUrl = outcome.url
+                dialog.dismiss()
+                broadcastState()
+            }
+            is WebViewController.Outcome.Error -> {
+                // Keep the dialog open and show the reason inline; a D-pad can
+                // reach the field again to correct it.
+                input.error = outcome.message
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -565,6 +740,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
      */
     fun handleBack(): Boolean {
         return when (BackOrder.decision(backState())) {
+            BackOrder.Action.CLOSE_MENU -> {
+                hideMenu()
+                true
+            }
+            BackOrder.Action.CLOSE_DEVICE -> {
+                hideDeviceOverlay()
+                true
+            }
             BackOrder.Action.CLOSE_INFO -> {
                 hideInfoOverlay()
                 true
@@ -589,8 +772,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 true
             }
             // Back at the true root: open the setup / pairing page. Exiting the
-            // kiosk is deliberate (long-press Back on API < 33, or the Exit App
-            // button on the setup page) and never a side effect of one press.
+            // kiosk is deliberate (the Exit App item in the on-device menu, or
+            // the Exit App button on the setup page) and never a side effect of
+            // one press.
             BackOrder.Action.SHOW_SETUP -> {
                 showInfoOverlay(issueNewPin = auth.currentPin() == null)
                 true
@@ -599,9 +783,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     }
 
     /**
-     * Deliberate exit, shared by the long-press of Back (API < 33) and the Exit
-     * App button on the setup page. [finishAndRemoveTask] leaves Recents too so
-     * the kiosk is not relaunched from there.
+     * Deliberate exit, shared by the on-device menu's Exit App item and the
+     * Exit App button on the setup page. [finishAndRemoveTask] leaves Recents
+     * too so the kiosk is not relaunched from there.
      */
     private fun exitApp() {
         SafeLog.i(TAG, "Exiting app")
@@ -614,16 +798,19 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         errorOverlayVisible = errorOverlay.visibility == View.VISIBLE,
         fullscreenVisible = customView != null,
         canGoBack = webViewController.canGoBackOnMain(),
-        atHome = HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl)
+        atHome = HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl),
+        menuVisible = menuOverlay.visibility == View.VISIBLE,
+        deviceInfoVisible = deviceOverlay.visibility == View.VISIBLE
     )
 
     @Suppress("DEPRECATION")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // TV remote access to the setup overlay: MENU / INFO buttons.
+        // The remote's MENU / INFO button opens the on-device menu (the setup /
+        // pairing page is a menu item). This used to toggle the setup overlay.
         if ((event.keyCode == KeyEvent.KEYCODE_MENU || event.keyCode == KeyEvent.KEYCODE_INFO) &&
             event.action == KeyEvent.ACTION_UP
         ) {
-            toggleInfoOverlay()
+            if (menuOverlay.visibility == View.VISIBLE) hideMenu() else showMenu()
             return true
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
@@ -641,13 +828,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 }
                 KeyEvent.ACTION_UP -> {
                     // A cancelled press (FLAG_CANCELED) is not a press at all:
-                    // no ladder, no exit.
+                    // no ladder, no menu.
                     if (event.isCanceled) return true
                     // Some remotes never send repeats, so the DOWN->UP elapsed
                     // time is the hold duration. A missing/malformed gesture is
-                    // never a long press (see BackOrder.isLongPress).
+                    // never a long press (see BackOrder.isLongPress). A long
+                    // press opens the on-device menu; a short press runs the
+                    // Back ladder.
                     if (BackOrder.isLongPress(event.downTime, event.eventTime, backLongPressMs)) {
-                        exitApp()
+                        showMenu()
                     } else {
                         handleBack()
                     }
@@ -699,21 +888,21 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
 
     override fun onWebStateChanged() {
         seq.incrementAndGet()
-        wsHub.broadcastState()
+        broadcastState()
     }
 
     override fun onWebProgress(progress: Int) {
-        wsHub.broadcastState()
+        broadcastState()
     }
 
     override fun onWebPageStarted(url: String?) {
         pageHasError = false
-        wsHub.broadcastState()
+        broadcastState()
     }
 
     override fun onWebPageFinished(url: String?) {
         if (!pageHasError) hideErrorOverlay()
-        wsHub.broadcastState()
+        broadcastState()
     }
 
     override fun onWebPageError(description: String) {
@@ -789,7 +978,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             is UrlValidator.Result.Valid -> {
                 config.homeUrl = validated.url
                 seq.incrementAndGet()
-                wsHub.broadcastState()
+                broadcastState()
                 ApiResult.ok("homeUrl" to validated.url)
             }
         }
@@ -843,7 +1032,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             if (keepAwake != null) applyKeepAwake(keepAwake)
         }
         seq.incrementAndGet()
-        wsHub.broadcastState()
+        broadcastState()
         return ApiResult.ok(
             "fullscreen" to config.fullscreen,
             "keepAwake" to config.keepScreenAwake
@@ -862,7 +1051,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         MainThreadBridge.post { updateInfoOverlay() }
         runOnIo {
             readvertise()
-            wsHub.broadcastState()
+            broadcastState()
         }
         return ApiResult.ok("deviceName" to name)
     }
@@ -885,6 +1074,38 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     override fun clearPin() = auth.clearPin()
 
     override fun pairedCount(): Int = auth.pairedCount()
+
+    override fun mqttStatus(): MqttStatus =
+        if (::mqttManager.isInitialized) mqttManager.status() else MqttStatus.DISABLED
+
+    override fun onMqttSettingsChanged() {
+        if (::mqttManager.isInitialized) mqttManager.restart()
+    }
+
+    // ---------------------------------------------------------------------
+    // MqttManager.Dispatcher
+    // ---------------------------------------------------------------------
+
+    /**
+     * Executes a parsed MQTT command. Every branch routes through the same
+     * ControllerHost operations the REST API uses, so the command is applied on
+     * the UI thread exactly like a controller request and MQTT cannot bypass
+     * the browser's own behaviour.
+     */
+    override fun dispatch(command: MqttCommand): ApiResult = when (command.action) {
+        MqttAction.OPEN -> command.url?.let { openUrl(it, false) }
+            ?: ApiResult.badRequest("missing_url", "open requires a url")
+        MqttAction.SET_HOME -> command.url?.let { setHomeUrl(it) }
+            ?: ApiResult.badRequest("missing_url", "set-home requires a url")
+        MqttAction.HOME -> navAction("home")
+        MqttAction.BACK -> navAction("back")
+        MqttAction.FORWARD -> navAction("forward")
+        MqttAction.RELOAD -> navAction("reload")
+        MqttAction.STOP -> navAction("stop")
+        MqttAction.RESTART_WEBVIEW -> restartWebView()
+        MqttAction.CLEAR_CACHE -> clearCache()
+        MqttAction.CLEAR_SITE_DATA -> clearSiteData()
+    }
 
     // ---------------------------------------------------------------------
     // Network
@@ -916,7 +1137,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
                 mdns.stop()
                 if (info != null) mdns.start(info.ip)
             }
-            wsHub.broadcastState()
+            broadcastState()
         }
         MainThreadBridge.post {
             if (infoOverlay.visibility == View.VISIBLE) updateInfoOverlay()

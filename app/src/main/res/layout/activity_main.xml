@@ -210,4 +210,110 @@
 
     </LinearLayout>
 
+    <!--
+      On-device menu (spec §15). Opened by a long press of Back where the hold
+      is observable (API ≤ 32) or by the remote's MENU / INFO key on any API.
+      Back closes it. Every item is focusable, so it is fully D-pad navigable;
+      the ScrollView keeps every item reachable on a short display.
+    -->
+    <ScrollView
+        android:id="@+id/menu_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E6000000"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="32dp">
+
+            <Button
+                android:id="@+id/menu_home"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/menu_home" />
+
+            <Button
+                android:id="@+id/menu_reload"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/menu_reload" />
+
+            <Button
+                android:id="@+id/menu_refresh_webview"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/menu_refresh_webview" />
+
+            <Button
+                android:id="@+id/menu_enter_url"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/menu_enter_url" />
+
+            <Button
+                android:id="@+id/menu_settings"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/menu_settings" />
+
+            <Button
+                android:id="@+id/menu_device_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/menu_device_info" />
+
+            <Button
+                android:id="@+id/menu_exit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/exit_app" />
+
+        </LinearLayout>
+
+    </ScrollView>
+
+    <!-- Read-only device information (spec §15 menu item), opened from the menu. -->
+    <LinearLayout
+        android:id="@+id/device_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E6000000"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <TextView
+                android:id="@+id/device_info_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="20sp"
+                android:textColor="#FFFFFF" />
+
+        </ScrollView>
+
+        <Button
+            android:id="@+id/device_close"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/close" />
+
+    </LinearLayout>
+
 </FrameLayout>

@@ -16,4 +16,15 @@
     <string name="trusted_networks">Trusted networks</string>
     <string name="allow_network">Allow %1$s</string>
     <string name="remove_network">Remove %1$s</string>
+    <string name="menu_home">Home</string>
+    <string name="menu_reload">Reload</string>
+    <string name="menu_refresh_webview">Refresh WebView</string>
+    <string name="menu_enter_url">Enter URL</string>
+    <string name="menu_settings">Settings</string>
+    <string name="menu_device_info">Device information</string>
+    <string name="enter_url_title">Enter URL</string>
+    <string name="open">Open</string>
+    <string name="open_set_home">Open + Set as Home</string>
+    <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
 </resources>
