@@ -127,6 +127,44 @@
   </section>
 
   <section class="card">
+    <h2>MQTT</h2>
+    <p class="warn">Broker access equals control. Anyone who can publish to the
+    <code>&lt;base&gt;/command</code> topic can drive this tablet — the controller
+    token is <strong>not</strong> required for MQTT commands. The broker
+    credentials are the only gate. Leave MQTT disabled unless you intend this.</p>
+    <p id="mqttState" class="muted"></p>
+    <label class="check"><input id="mqttEnabledToggle" type="checkbox"> Enable MQTT</label>
+
+    <label for="mqttHostInput">Broker host</label>
+    <input id="mqttHostInput" type="text" autocomplete="off" placeholder="192.168.1.10">
+
+    <label for="mqttPortInput">Port</label>
+    <input id="mqttPortInput" type="number" min="1" max="65535" autocomplete="off">
+
+    <label class="check"><input id="mqttTlsToggle" type="checkbox"> Use TLS (ssl://)</label>
+
+    <label for="mqttUsernameInput">Username</label>
+    <input id="mqttUsernameInput" type="text" autocomplete="off">
+
+    <label for="mqttPasswordInput">Password</label>
+    <input id="mqttPasswordInput" type="password" autocomplete="new-password" placeholder="leave blank to keep">
+
+    <label for="mqttBaseTopicInput">Base topic</label>
+    <input id="mqttBaseTopicInput" type="text" autocomplete="off" placeholder="terebibro/&lt;device&gt;">
+
+    <label class="check"><input id="mqttDiscoveryToggle" type="checkbox"> Home Assistant discovery</label>
+
+    <label for="mqttDiscoveryPrefixInput">Discovery prefix</label>
+    <input id="mqttDiscoveryPrefixInput" type="text" autocomplete="off" placeholder="homeassistant">
+
+    <div class="row">
+      <button id="saveMqtt" class="primary">Save MQTT</button>
+      <button id="clearMqttPassword" class="danger">Clear password</button>
+    </div>
+    <p id="mqttError" class="error"></p>
+  </section>
+
+  <section class="card">
     <h2>Device</h2>
     <p id="webViewWarning" class="warn hidden"></p>
     <dl class="status-grid">
@@ -137,6 +175,7 @@
       <dt>WebView</dt><dd id="infoWebView" class="break"></dd>
       <dt>IP</dt><dd id="infoIp"></dd>
       <dt>Port</dt><dd id="infoPort"></dd>
+      <dt>MQTT</dt><dd id="infoMqtt"></dd>
       <dt>Paired devices</dt><dd id="infoPaired"></dd>
     </dl>
     <div class="row">

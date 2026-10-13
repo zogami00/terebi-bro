@@ -55,8 +55,8 @@ android {
         // path falls back to the legacy systemUiVisibility flags below API 30.
         minSdk = 28
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 6
+        versionName = "0.3.3"
     }
 
     signingConfigs {
@@ -118,6 +118,14 @@ android {
     lint {
         lintConfig = file("lint.xml")
     }
+
+    testOptions {
+        // JVM unit tests have no Android runtime: without this, any
+        // `android.util.Log` call (e.g. through SafeLog) throws
+        // "not mocked" and can abort the code path under test. Returning
+        // defaults keeps logging a no-op, as it is on device.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -128,5 +136,15 @@ dependencies {
     implementation("org.jmdns:jmdns:3.6.3")
     implementation("org.slf4j:slf4j-nop:2.0.7")
 
+    // MQTT client: plain Java, no Android service and no Netty. Used only when
+    // the opt-in MQTT setting is enabled; the app is unaffected otherwise.
+    implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+
     testImplementation("junit:junit:4.13.2")
+
+    // Unit tests run on the JVM, where Android's `org.json` stubs throw
+    // "not mocked". The real implementation is provided on the test classpath
+    // only, so `StateJson` and the MQTT status payload built from it can be
+    // exercised directly. It is not shipped in the app.
+    testImplementation("org.json:json:20240303")
 }

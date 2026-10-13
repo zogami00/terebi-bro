@@ -2,6 +2,9 @@ package com.terebibro.tv.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.terebibro.tv.mqtt.MqttSettings
+import com.terebibro.tv.mqtt.MqttTopics
+import com.terebibro.tv.mqtt.MqttUpdate
 import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.security.TokenStorage
@@ -74,6 +77,94 @@ class ConfigStore(context: Context) {
      * `[a-z0-9-]`, trimmed of leading/trailing hyphens and capped at 63 chars.
      */
     val mdnsName: String get() = MdnsName.sanitize(deviceName, DEFAULT_DEVICE_NAME)
+
+    // ---------------------------------------------------------------------
+    // MQTT (off by default; broker credentials are the only gate for commands)
+    // ---------------------------------------------------------------------
+
+    var mqttEnabled: Boolean
+        get() = prefs.getBoolean(KEY_MQTT_ENABLED, MqttSettings.DEFAULT_ENABLED)
+        set(value) = prefs.edit().putBoolean(KEY_MQTT_ENABLED, value).apply()
+
+    var mqttHost: String
+        get() = prefs.getString(KEY_MQTT_HOST, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_MQTT_HOST, value).apply()
+
+    var mqttPort: Int
+        get() = prefs.getInt(KEY_MQTT_PORT, MqttSettings.DEFAULT_PORT)
+        set(value) = prefs.edit().putInt(KEY_MQTT_PORT, value).apply()
+
+    var mqttTls: Boolean
+        get() = prefs.getBoolean(KEY_MQTT_TLS, MqttSettings.DEFAULT_TLS)
+        set(value) = prefs.edit().putBoolean(KEY_MQTT_TLS, value).apply()
+
+    var mqttUsername: String
+        get() = prefs.getString(KEY_MQTT_USERNAME, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_MQTT_USERNAME, value).apply()
+
+    var mqttPassword: String
+        get() = prefs.getString(KEY_MQTT_PASSWORD, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_MQTT_PASSWORD, value).apply()
+
+    /**
+     * The stored base topic, raw. Empty means "derive from the device name" so
+     * the default (`terebibro/<mdnsName>`) tracks a device-name change.
+     */
+    var mqttBaseTopic: String
+        get() = prefs.getString(KEY_MQTT_BASE_TOPIC, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_MQTT_BASE_TOPIC, value).apply()
+
+    /** Home Assistant MQTT Discovery; only meaningful while MQTT is enabled. */
+    var mqttDiscoveryEnabled: Boolean
+        get() = prefs.getBoolean(KEY_MQTT_DISCOVERY_ENABLED, MqttSettings.DEFAULT_DISCOVERY_ENABLED)
+        set(value) = prefs.edit().putBoolean(KEY_MQTT_DISCOVERY_ENABLED, value).apply()
+
+    var mqttDiscoveryPrefix: String
+        get() = prefs.getString(KEY_MQTT_DISCOVERY_PREFIX, MqttSettings.DEFAULT_DISCOVERY_PREFIX)
+            ?: MqttSettings.DEFAULT_DISCOVERY_PREFIX
+        set(value) = prefs.edit().putString(KEY_MQTT_DISCOVERY_PREFIX, value).apply()
+
+    /**
+     * The discovery prefix actually published on the last connect, or null if
+     * discovery has never been published. Used to clear the configs left under
+     * a previous prefix after the prefix setting changes; it is internal state,
+     * not a user-facing setting, so it is not part of `MqttSettings`.
+     */
+    var mqttLastDiscoveryPrefix: String?
+        get() = prefs.getString(KEY_MQTT_LAST_DISCOVERY_PREFIX, null)
+        set(value) = prefs.edit().putString(KEY_MQTT_LAST_DISCOVERY_PREFIX, value).apply()
+
+    /** The effective settings, with the base topic defaulted from the device name. */
+    val mqttSettings: MqttSettings
+        get() = MqttSettings(
+            enabled = mqttEnabled,
+            host = mqttHost,
+            port = mqttPort,
+            tls = mqttTls,
+            username = mqttUsername,
+            password = mqttPassword,
+            baseTopic = MqttTopics.baseTopic(mqttBaseTopic, mdnsName),
+            discoveryEnabled = mqttDiscoveryEnabled,
+            discoveryPrefix = mqttDiscoveryPrefix
+        )
+
+    /**
+     * Applies a validated partial update in one durable write, so a bad request
+     * can never leave the MQTT settings half-changed.
+     */
+    fun applyMqttUpdate(update: MqttUpdate) {
+        val editor = prefs.edit()
+        update.enabled?.let { editor.putBoolean(KEY_MQTT_ENABLED, it) }
+        update.host?.let { editor.putString(KEY_MQTT_HOST, it) }
+        update.port?.let { editor.putInt(KEY_MQTT_PORT, it) }
+        update.tls?.let { editor.putBoolean(KEY_MQTT_TLS, it) }
+        update.username?.let { editor.putString(KEY_MQTT_USERNAME, it) }
+        update.password?.let { editor.putString(KEY_MQTT_PASSWORD, it) }
+        update.baseTopic?.let { editor.putString(KEY_MQTT_BASE_TOPIC, it) }
+        update.discoveryEnabled?.let { editor.putBoolean(KEY_MQTT_DISCOVERY_ENABLED, it) }
+        update.discoveryPrefix?.let { editor.putString(KEY_MQTT_DISCOVERY_PREFIX, it) }
+        editor.commit()
+    }
 
     /** Durable storage adapter for the paired-controller registry. */
     val tokenStorage: TokenStorage = object : TokenStorage {
@@ -163,6 +254,16 @@ class ConfigStore(context: Context) {
         private const val KEY_PAIRED_TOKENS = "pairedTokens"
         private const val KEY_SETUP_DONE = "setupDone"
         private const val KEY_EXTRA_NETWORKS = "extraClientNetworks"
+        private const val KEY_MQTT_ENABLED = "mqttEnabled"
+        private const val KEY_MQTT_HOST = "mqttHost"
+        private const val KEY_MQTT_PORT = "mqttPort"
+        private const val KEY_MQTT_TLS = "mqttTls"
+        private const val KEY_MQTT_USERNAME = "mqttUsername"
+        private const val KEY_MQTT_PASSWORD = "mqttPassword"
+        private const val KEY_MQTT_BASE_TOPIC = "mqttBaseTopic"
+        private const val KEY_MQTT_DISCOVERY_ENABLED = "mqttDiscoveryEnabled"
+        private const val KEY_MQTT_DISCOVERY_PREFIX = "mqttDiscoveryPrefix"
+        private const val KEY_MQTT_LAST_DISCOVERY_PREFIX = "mqttLastDiscoveryPrefix"
 
         const val DEFAULT_HOME_URL = "https://example.com"
         const val DEFAULT_DEVICE_NAME = "terebi-tv"

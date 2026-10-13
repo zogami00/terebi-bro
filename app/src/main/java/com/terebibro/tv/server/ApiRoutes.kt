@@ -4,6 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
+import com.terebibro.tv.mqtt.MqttSettingsValidator
+import com.terebibro.tv.mqtt.MqttUpdate
 import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.util.SafeLog
@@ -11,6 +13,7 @@ import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
 /**
@@ -88,6 +91,17 @@ class ApiRoutes(
                 setOf("networks"),
                 arrayKeys = setOf("networks"),
                 handler = { _, _, v -> setNetworks(v) }
+            )
+        )
+
+        put(Method.GET to "/api/settings/mqtt", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> mqttSettings() }))
+        put(
+            Method.POST to "/api/settings/mqtt",
+            Route(
+                Method.POST,
+                true,
+                setOf("enabled", "host", "port", "tls", "username", "password", "baseTopic", "discoveryEnabled", "discoveryPrefix"),
+                handler = { _, _, v -> setMqttSettings(v) }
             )
         )
 
@@ -268,6 +282,7 @@ class ApiRoutes(
 
     private fun device(): Response {
         val snapshot = host.buildState() ?: return Http.serviceUnavailable()
+        val mqtt = host.mqttStatus()
         val obj = mapOf(
             "deviceName" to snapshot.deviceName,
             "appVersion" to snapshot.appVersion,
@@ -278,6 +293,10 @@ class ApiRoutes(
             "ip" to snapshot.ip,
             "port" to snapshot.port,
             "pairedCount" to auth.pairedCount(),
+            "mqttConnected" to mqtt.connected,
+            "mqttDiscoveryTopics" to mqtt.discoveryTopics,
+            "mqttDiscoveryError" to (mqtt.discoveryError ?: JSONObject.NULL),
+            "mqttStatusError" to (mqtt.statusError ?: JSONObject.NULL),
             "extraNetworks" to JSONArray(snapshot.extraNetworks)
         )
         return Http.ok(obj)
@@ -374,6 +393,73 @@ class ApiRoutes(
         config.extraClientNetworks = accepted
         wsHub.broadcastState()
         return Http.ok(mapOf("networks" to JSONArray(accepted)))
+    }
+
+    // ---------------------------------------------------------------------
+    // MQTT settings
+    // ---------------------------------------------------------------------
+
+    /** The stored MQTT settings plus read-only status. Never returns the password. */
+    private fun mqttSettings(): Response {
+        val settings = config.mqttSettings
+        val status = host.mqttStatus()
+        return Http.ok(
+            mapOf(
+                "enabled" to settings.enabled,
+                "host" to settings.host,
+                "port" to settings.port,
+                "tls" to settings.tls,
+                "username" to settings.username,
+                "baseTopic" to settings.baseTopic,
+                "discoveryEnabled" to settings.discoveryEnabled,
+                "discoveryPrefix" to settings.discoveryPrefix,
+                "mqttPasswordSet" to settings.password.isNotEmpty(),
+                "mqttConnected" to status.connected,
+                "mqttState" to status.state.name.lowercase(),
+                "mqttLastError" to status.lastError,
+                "mqttDiscoveryTopics" to status.discoveryTopics,
+                "mqttDiscoveryError" to status.discoveryError,
+                "mqttStatusError" to status.statusError
+            )
+        )
+    }
+
+    /**
+     * Updates the MQTT settings. Every supplied field is validated before
+     * anything is written: a bad value is `400 bad_request` naming the field and
+     * the stored settings are left untouched (never a partial write). The
+     * password is write-only — send an empty string to clear it.
+     */
+    private fun setMqttSettings(values: Map<String, Json.Value>): Response {
+        val update = try {
+            MqttUpdate(
+                enabled = Json.optionalBool(values, "enabled"),
+                host = Json.optionalString(values, "host", MqttSettingsValidator.MAX_HOST),
+                port = Json.optionalInt(values, "port"),
+                tls = Json.optionalBool(values, "tls"),
+                username = Json.optionalString(values, "username", MqttSettingsValidator.MAX_CREDENTIAL),
+                password = Json.optionalString(values, "password", MqttSettingsValidator.MAX_CREDENTIAL),
+                baseTopic = Json.optionalString(values, "baseTopic", MqttSettingsValidator.MAX_TOPIC),
+                discoveryEnabled = Json.optionalBool(values, "discoveryEnabled"),
+                discoveryPrefix = Json.optionalString(values, "discoveryPrefix", MqttSettingsValidator.MAX_TOPIC)
+            )
+        } catch (e: Json.BadJson) {
+            return Http.error(Response.Status.BAD_REQUEST, "bad_request", e.message ?: "Invalid request body")
+        }
+
+        return when (val validated = MqttSettingsValidator.validate(update)) {
+            is MqttSettingsValidator.Result.Invalid ->
+                Http.error(
+                    Response.Status.BAD_REQUEST,
+                    "bad_request",
+                    "${validated.field}: ${validated.message}"
+                )
+            is MqttSettingsValidator.Result.Valid -> {
+                config.applyMqttUpdate(validated.update)
+                host.onMqttSettingsChanged()
+                mqttSettings()
+            }
+        }
     }
 
     private fun respond(result: ApiResult): Response = when (result) {
