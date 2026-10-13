@@ -20,6 +20,7 @@
   var attempt = 0;
   var pingTimer = null;
   var bannerTimer = null;
+  var networks = [];
 
   function $(id) { return document.getElementById(id); }
 
@@ -188,6 +189,7 @@
       show($('mainScreen'));
       if (message.state) updateState(message.state);
       refreshDevice();
+      refreshNetworks();
     } else if (message.type === 'state') {
       updateState(message.state);
     } else if (message.type === 'event') {
@@ -270,6 +272,7 @@
     setValueIfIdle('homeUrlInput', state.homeUrl);
     setValueIfIdle('deviceNameInput', state.deviceName);
     setValueIfIdle('portInput', state.port);
+    setNetworks(state.extraNetworks);
     var fullscreen = $('fullscreenToggle');
     if (fullscreen && document.activeElement !== fullscreen) fullscreen.checked = !!state.fullscreen;
     var keepAwake = $('keepAwakeToggle');
@@ -316,6 +319,95 @@
       '. Modern websites may render incorrectly. ' +
       'Update "Android System WebView" / update the device.';
     show(el);
+  }
+
+  /* ------------------------------------------------- trusted networks (bootstrap) */
+
+  /* Client-side mirror of the server's rule: dotted-quad IPv4 with a /8../32
+     prefix. The server validates again and is authoritative. */
+  function validCidr(value) {
+    var match = /^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\/([0-9]{1,2})$/.exec(value);
+    if (!match) return false;
+    for (var i = 1; i <= 4; i++) {
+      if (parseInt(match[i], 10) > 255) return false;
+    }
+    var prefix = parseInt(match[5], 10);
+    return prefix >= 8 && prefix <= 32;
+  }
+
+  /* Server-provided values only ever reach the DOM through textContent. */
+  function renderNetworks(list) {
+    networks = (list || []).slice();
+    var ul = $('networkList');
+    if (!ul) return;
+    while (ul.firstChild) ul.removeChild(ul.firstChild);
+    if (networks.length === 0) {
+      var empty = document.createElement('li');
+      empty.className = 'muted';
+      empty.textContent = 'No extra networks. Only the TV\u2019s own subnet can reach the controller.';
+      ul.appendChild(empty);
+      return;
+    }
+    networks.forEach(function (net) {
+      var li = document.createElement('li');
+      var span = document.createElement('span');
+      span.textContent = net;
+      var button = document.createElement('button');
+      button.className = 'danger';
+      button.textContent = 'Remove';
+      button.addEventListener('click', function () { removeNetwork(net); });
+      li.appendChild(span);
+      li.appendChild(button);
+      ul.appendChild(li);
+    });
+  }
+
+  /* Rebuild only when the list actually changed, so a state broadcast during a
+     page load never yanks the list out from under the user. */
+  function setNetworks(list) {
+    var next = list || [];
+    if (next.join('|') === networks.join('|')) return;
+    renderNetworks(next);
+  }
+
+  function refreshNetworks() {
+    api('GET', '/api/settings/networks', undefined).then(function (result) {
+      if (result.status === 200 && result.json && result.json.networks) {
+        renderNetworks(result.json.networks);
+      }
+    });
+  }
+
+  function addNetwork() {
+    var input = $('networkInput');
+    var error = $('networkError');
+    var value = input.value.trim();
+    if (!validCidr(value)) {
+      error.textContent = 'Enter an IPv4 CIDR such as 10.10.1.0/24 (prefix /8 to /32).';
+      return;
+    }
+    error.textContent = '';
+    var next = networks.slice();
+    if (next.indexOf(value) < 0) next.push(value);
+    api('POST', '/api/settings/networks', { networks: next }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.networks) {
+        renderNetworks(result.json.networks);
+        input.value = '';
+      } else {
+        error.textContent = apiError(result);
+      }
+    });
+  }
+
+  function removeNetwork(value) {
+    var next = networks.filter(function (net) { return net !== value; });
+    api('POST', '/api/settings/networks', { networks: next }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.networks) {
+        renderNetworks(result.json.networks);
+      } else {
+        banner(apiError(result));
+      }
+    });
   }
 
   /* ------------------------------------------------------------------ actions */
@@ -397,6 +489,8 @@
     $('saveHomeUrl').addEventListener('click', saveHomeUrl);
     $('saveDeviceName').addEventListener('click', saveDeviceName);
     $('savePort').addEventListener('click', savePort);
+    $('addNetwork').addEventListener('click', addNetwork);
+    $('networkInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') addNetwork(); });
     $('fullscreenToggle').addEventListener('change', saveDisplay);
     $('keepAwakeToggle').addEventListener('change', saveDisplay);
 
@@ -410,6 +504,7 @@
     show($('mainScreen'));
     connect();
     refreshDevice();
+    refreshNetworks();
     api('GET', '/api/state', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.state) updateState(result.json.state);
     });

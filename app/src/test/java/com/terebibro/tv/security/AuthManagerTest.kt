@@ -290,4 +290,44 @@ class AuthManagerTest {
             hosts
         )
     }
+
+    // ------------------------------------------- extra trusted client networks
+
+    private val extraNetworks = listOf("10.10.1.0/24")
+
+    @Test
+    fun `a peer inside a configured extra network is allowed`() {
+        assertTrue(AuthManager.isPeerAllowed("10.10.1.10", device, false, extraNetworks))
+        assertTrue(AuthManager.isPeerAllowed("10.10.1.0", device, false, extraNetworks))
+        assertTrue(AuthManager.isPeerAllowed("10.10.1.255", device, false, extraNetworks))
+    }
+
+    @Test
+    fun `a peer outside every network is still rejected`() {
+        assertFalse(AuthManager.isPeerAllowed("10.10.2.10", device, false, extraNetworks))
+        assertFalse(AuthManager.isPeerAllowed("192.168.9.9", device, false, extraNetworks))
+    }
+
+    @Test
+    fun `the device's own address stays rejected even when a network would match it`() {
+        assertFalse(AuthManager.isPeerAllowed(device.ip, device, false, listOf("10.0.2.0/24")))
+    }
+
+    @Test
+    fun `loopback behaviour is unchanged by a configured network`() {
+        // Loopback is decided by allowLocalhost before any network is consulted.
+        assertFalse(AuthManager.isPeerAllowed("127.0.0.1", device, false, listOf("127.0.0.0/8")))
+        assertTrue(AuthManager.isPeerAllowed("127.0.0.1", device, true, listOf("127.0.0.0/8")))
+        assertTrue(AuthManager.isPeerAllowed("127.9.9.9", device, true, emptyList()))
+    }
+
+    @Test
+    fun `an empty extra network list behaves exactly as before`() {
+        assertTrue(AuthManager.isPeerAllowed("10.0.2.99", device, false, emptyList()))
+        assertFalse(AuthManager.isPeerAllowed("10.10.1.10", device, false, emptyList()))
+        assertFalse(AuthManager.isPeerAllowed("192.168.9.9", device, false, emptyList()))
+        assertFalse(AuthManager.isPeerAllowed(null, device, false, emptyList()))
+        assertFalse(AuthManager.isPeerAllowed("", device, false, emptyList()))
+        assertFalse(AuthManager.isPeerAllowed("10.0.2.99", null, false, extraNetworks))
+    }
 }

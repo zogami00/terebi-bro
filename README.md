@@ -17,6 +17,8 @@ LAN opens the bundled controller page and drives the TV browser.
 - Embedded control server on a configurable port (default **8765**).
 - Bundled, responsive web controller (no CDN, no external assets).
 - Pairing PIN + per-device bearer tokens, CSRF header, Host/Origin checks.
+- Optional extra trusted client networks, so a controller on a different subnet
+  (for example an admin VLAN) can reach the pairing prompt.
 - Live state over WebSocket (current URL, title, loading, network, uptime).
 - Remote D-pad, navigation, browser management and settings.
 - mDNS advertisement as `<deviceName>.local`, with an IP fallback.
@@ -182,6 +184,7 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | Keep screen awake | on |
 | Automatic retry | on |
 | Retry interval | 10 s |
+| Trusted client networks | none (own subnet only) |
 
 Changing the controller port persists the new value only after the bind is
 probed; an unavailable port is rejected with `409 port_unavailable` and the old
@@ -285,6 +288,60 @@ measured on hardware, though the Back ladder and the hold-to-exit behaviour were
 verified end-to-end by the maintainer on the reference Android 9 device (see
 [Verification status](#verification-status)).
 
+## Trusted networks (extra client networks)
+
+By default the control server accepts connections **only from the TV's own
+IPv4 subnet** (spec §19, "local-network binding only"). That is a problem when
+the TV and the controller are on different subnets: a TV at `10.10.30.10` and a
+PC at `10.10.1.10` cannot reach each other at all, so the user cannot even open
+the controller to change a setting.
+
+The **trusted networks** setting widens that reach without weakening the rest of
+the model. It is a list of IPv4 CIDR ranges, **empty by default**, in addition
+to the TV's own subnet:
+
+- A peer is admitted to the controller when it is in the TV's own subnet **or**
+  inside one of the configured networks.
+- **The list only widens who may *reach* the pairing prompt.** It does not
+  bypass the pairing PIN, the bearer token, the CSRF header, the Host/Origin
+  checks, the rate limits or the connection caps. An unpaired device that
+  reaches the page sees only the pairing screen and still needs the PIN.
+- A prefix broader than **/8** is refused: a /7 or wider would cover an
+  enormous slice of the internet and effectively disable the control. Host bits
+  are accepted and normalised: `10.10.1.10/24` is stored as `10.10.1.0/24`.
+- The list holds at most **16** entries. A request with an invalid entry (or an
+  17th one) is refused as `400 bad_request` and names the offending entries;
+  nothing is silently dropped. Duplicates are collapsed.
+- Values are stored as a normalised JSON array under `extraClientNetworks` and
+  surfaced as `extraNetworks` in `GET /api/state`, the WebSocket `state`
+  broadcast and `GET /api/device`.
+
+It is managed from the controller's **Settings** panel (add and remove with
+validation on the client and again on the server) via:
+
+- `GET /api/settings/networks` — `{ "networks": ["10.10.1.0/24", …] }`
+- `POST /api/settings/networks` — body `{ "networks": [ … ] }` replaces the list.
+
+### The chicken-and-egg bootstrap (TV one-tap allow)
+
+The setting is intentionally configured **from the controller**, but a controller
+on a blocked subnet cannot reach the controller page to configure it. The TV
+overlay closes that loop:
+
+1. The PC at `10.10.1.10` tries to open the controller and gets
+   `403 forbidden / remote`.
+2. The TV records the rejected address **in memory only** (never persisted,
+   never logged) and the setup / pairing overlay — reachable with the remote's
+   **MENU** / **INFO** key — shows a **Blocked clients** list.
+3. Pressing **Allow 10.10.1.0/24** adds the containing /24 in one press. Typing a
+   CIDR with a TV remote is unworkable, which is exactly why this exists.
+4. The overlay also lists the currently trusted networks, each removable.
+
+The blocked list is bounded to the **5** most recent addresses, de-duplicated by
+IP, and cleared once an address is allowed. It is never written to storage and
+the addresses are never written to the log; the on-screen TV list is the only
+place an address appears.
+
 ## Testing the controller on an emulator
 
 The control server is reachable only from the TV's own LAN subnet, and an
@@ -329,7 +386,10 @@ What it does protect against:
   (lowercase `[a-z0-9-]`, ≤63 chars) before it is used for mDNS and Host checks.
 - Off-subnet and loopback peers: the peer address is taken from the accepted
   socket (never from `X-Forwarded-For` / `X-Real-IP` / `Forwarded`) and must be
-  in the TV's subnet; the TV's own address is rejected too.
+  in the TV's subnet; the TV's own address is rejected too. A peer outside that
+  subnet is admitted only when it falls inside an explicitly configured
+  [trusted network](#trusted-networks-extra-client-networks), and that admits it
+  only to the pairing prompt — the PIN and token still gate control.
 - Remote access abuse: rate limits of 20 req/s per token and 100 D-pad req/s,
   applied to REST requests and WebSocket messages alike.
 - Connection exhaustion: concurrent handlers are capped globally (64) and per
@@ -379,7 +439,7 @@ bodies and WebSocket `auth` messages are never logged.
 Validated by building and by JVM unit tests:
 
 - `assembleDebug` builds and produces `app-debug.apk`.
-- `testDebugUnitTest` passes: 116 JVM tests (PIN/token/auth logic, token registry
+- `testDebugUnitTest` passes: 131 JVM tests (PIN/token/auth logic, token registry
   (including revocation persistence and corrupt-blob recovery), rate limiter
   (including bucket pruning), Host/Origin matching, the per-peer connection
   limiter, the bound-port write-back rule, the Back-behaviour ladder (including
@@ -388,7 +448,10 @@ Validated by building and by JVM unit tests:
   start and a malformed negative delta), strict JSON parsing, request-body
   framing rules, the mDNS name
   sanitiser, the WebSocket frame-size cap, URL validation, subnet membership, the
-  debug-only loopback/localhost peer & Host policy and the listener bind-host
+  debug-only loopback/localhost peer & Host policy, the CIDR parser and list
+  validation behind the trusted-networks setting (prefix bounds, host-bit
+  normalisation, membership boundaries, de-duplication and the 16-entry cap),
+  the extra-network peer policy, the listener bind-host
   choice, and the advisory WebView-version check with its unknown-input
   safety).
 - `lintDebug` runs (0 errors, `NewApi`-clean after lowering `minSdk`).

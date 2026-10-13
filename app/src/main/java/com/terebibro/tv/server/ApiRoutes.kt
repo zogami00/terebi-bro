@@ -4,11 +4,13 @@ import android.os.Handler
 import android.os.Looper
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
+import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.util.SafeLog
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
+import org.json.JSONArray
 import java.io.ByteArrayInputStream
 
 /**
@@ -35,43 +37,61 @@ class ApiRoutes(
         val method: Method,
         val authRequired: Boolean,
         val allowedKeys: Set<String>,
+        /** Keys whose value is a string array rather than a scalar. */
+        val arrayKeys: Set<String> = emptySet(),
         val isDpad: Boolean = false,
         val handler: (IHTTPSession, PairedToken?, Map<String, Json.Value>) -> Response
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val routes: Map<String, Route> = buildMap {
-        put("/", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("index.html") }))
-        put("/app.js", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("app.js") }))
-        put("/app.css", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("app.css") }))
+    /**
+     * Keyed by `method to path` so one path may serve more than one method
+     * (`/api/settings/networks` is both GET and POST). An unknown path is 404;
+     * a known path with the wrong method is 405.
+     */
+    private val routes: Map<Pair<Method, String>, Route> = buildMap {
+        put(Method.GET to "/", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("index.html") }))
+        put(Method.GET to "/app.js", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("app.js") }))
+        put(Method.GET to "/app.css", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> staticFile("app.css") }))
 
-        put("/api/info", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> info() }))
-        put("/api/pair", Route(Method.POST, false, setOf("pin", "clientName"), handler = { _, _, v -> pair(v) }))
+        put(Method.GET to "/api/info", Route(Method.GET, false, emptySet(), handler = { _, _, _ -> info() }))
+        put(Method.POST to "/api/pair", Route(Method.POST, false, setOf("pin", "clientName"), handler = { _, _, v -> pair(v) }))
 
-        put("/api/unpair", Route(Method.POST, true, emptySet(), handler = { _, t, _ -> unpair(t) }))
-        put("/api/state", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> state() }))
-        put("/api/device", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> device() }))
+        put(Method.POST to "/api/unpair", Route(Method.POST, true, emptySet(), handler = { _, t, _ -> unpair(t) }))
+        put(Method.GET to "/api/state", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> state() }))
+        put(Method.GET to "/api/device", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> device() }))
 
-        put("/api/nav/open", Route(Method.POST, true, setOf("url", "setHome"), handler = { _, _, v -> navOpen(v) }))
-        put("/api/home", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> setHome(v) }))
-        put("/api/nav/home", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("home") }))
-        put("/api/nav/back", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("back") }))
-        put("/api/nav/forward", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("forward") }))
-        put("/api/nav/reload", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("reload") }))
-        put("/api/nav/stop", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("stop") }))
+        put(Method.POST to "/api/nav/open", Route(Method.POST, true, setOf("url", "setHome"), handler = { _, _, v -> navOpen(v) }))
+        put(Method.POST to "/api/home", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> setHome(v) }))
+        put(Method.POST to "/api/nav/home", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("home") }))
+        put(Method.POST to "/api/nav/back", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("back") }))
+        put(Method.POST to "/api/nav/forward", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("forward") }))
+        put(Method.POST to "/api/nav/reload", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("reload") }))
+        put(Method.POST to "/api/nav/stop", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> nav("stop") }))
 
-        put("/api/webview/restart", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> restart() }))
-        put("/api/webview/clear-cache", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> clearCache() }))
-        put("/api/webview/clear-site-data", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> clearSiteData() }))
+        put(Method.POST to "/api/webview/restart", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> restart() }))
+        put(Method.POST to "/api/webview/clear-cache", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> clearCache() }))
+        put(Method.POST to "/api/webview/clear-site-data", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> clearSiteData() }))
 
-        put("/api/display", Route(Method.POST, true, setOf("fullscreen", "keepAwake"), handler = { _, _, v -> display(v) }))
-        put("/api/dpad", Route(Method.POST, true, setOf("key"), isDpad = true, handler = { _, _, v -> dpad(v) }))
+        put(Method.POST to "/api/display", Route(Method.POST, true, setOf("fullscreen", "keepAwake"), handler = { _, _, v -> display(v) }))
+        put(Method.POST to "/api/dpad", Route(Method.POST, true, setOf("key"), isDpad = true, handler = { _, _, v -> dpad(v) }))
 
-        put("/api/settings/device-name", Route(Method.POST, true, setOf("name"), handler = { _, _, v -> setDeviceName(v) }))
-        put("/api/settings/port", Route(Method.POST, true, setOf("port"), handler = { _, _, v -> setPort(v) }))
+        put(Method.POST to "/api/settings/device-name", Route(Method.POST, true, setOf("name"), handler = { _, _, v -> setDeviceName(v) }))
+        put(Method.POST to "/api/settings/port", Route(Method.POST, true, setOf("port"), handler = { _, _, v -> setPort(v) }))
+        put(Method.GET to "/api/settings/networks", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> networks() }))
+        put(
+            Method.POST to "/api/settings/networks",
+            Route(
+                Method.POST,
+                true,
+                setOf("networks"),
+                arrayKeys = setOf("networks"),
+                handler = { _, _, v -> setNetworks(v) }
+            )
+        )
 
-        put("/ws", Route(Method.GET, false, emptySet(), handler = { _, _, _ ->
+        put(Method.GET to "/ws", Route(Method.GET, false, emptySet(), handler = { _, _, _ ->
             Http.error(Response.Status.BAD_REQUEST, "websocket_required", "Use a WebSocket upgrade")
         }))
     }
@@ -85,12 +105,16 @@ class ApiRoutes(
         val method = session.method
 
         // (1) exact method + route allowlist
-        val route = routes[path]
-            ?: return closeIfNeeded(session, Http.error(Response.Status.NOT_FOUND, "not_found", "Unknown route"))
-        if (method != route.method) {
+        val route = routes[method to path]
+        if (route == null) {
+            val knownPath = routes.keys.any { it.second == path }
             return closeIfNeeded(
                 session,
-                Http.error(Response.Status.METHOD_NOT_ALLOWED, "method_not_allowed", "Method not allowed")
+                if (knownPath) {
+                    Http.error(Response.Status.METHOD_NOT_ALLOWED, "method_not_allowed", "Method not allowed")
+                } else {
+                    Http.error(Response.Status.NOT_FOUND, "not_found", "Unknown route")
+                }
             )
         }
 
@@ -147,7 +171,7 @@ class ApiRoutes(
         val body: ByteArray? = if (declaredLength > 0) readBody(session, declaredLength) else null
         val values: Map<String, Json.Value> = if (body != null) {
             try {
-                Json.parseObject(ByteArrayInputStream(body), route.allowedKeys)
+                Json.parseObject(ByteArrayInputStream(body), route.allowedKeys, route.arrayKeys)
             } catch (e: Json.BadJson) {
                 return Http.error(Response.Status.BAD_REQUEST, "bad_request", "Invalid JSON body")
             }
@@ -253,7 +277,8 @@ class ApiRoutes(
             "webViewOutdated" to snapshot.webViewOutdated,
             "ip" to snapshot.ip,
             "port" to snapshot.port,
-            "pairedCount" to auth.pairedCount()
+            "pairedCount" to auth.pairedCount(),
+            "extraNetworks" to JSONArray(snapshot.extraNetworks)
         )
         return Http.ok(obj)
     }
@@ -328,6 +353,29 @@ class ApiRoutes(
         return result
     }
 
+    private fun networks(): Response =
+        Http.ok(mapOf("networks" to JSONArray(config.extraClientNetworks)))
+
+    /**
+     * Replaces the extra trusted networks. Every rejected entry is named with a
+     * reason and the whole request is refused as `400 bad_request` — nothing is
+     * silently dropped.
+     */
+    private fun setNetworks(values: Map<String, Json.Value>): Response {
+        val raw = Json.requireStringList(values, "networks", MAX_NETWORK_ENTRIES, MAX_NETWORK_CHARS)
+        val (accepted, rejected) = ClientNetworks.validateList(raw)
+        if (rejected.isNotEmpty()) {
+            return Http.error(
+                Response.Status.BAD_REQUEST,
+                "bad_request",
+                "Rejected networks: ${rejected.joinToString("; ")}"
+            )
+        }
+        config.extraClientNetworks = accepted
+        wsHub.broadcastState()
+        return Http.ok(mapOf("networks" to JSONArray(accepted)))
+    }
+
     private fun respond(result: ApiResult): Response = when (result) {
         is ApiResult.Ok -> Http.ok(result.fields)
         is ApiResult.Err -> Http.error(statusFor(result.status), result.code, result.message, result.retryAfterSec)
@@ -364,5 +412,9 @@ class ApiRoutes(
         const val TAG = "ApiRoutes"
         val PIN_REGEX = Regex("^[0-9]{6}$")
         val DPAD_KEYS = setOf("up", "down", "left", "right", "ok", "back")
+
+        /** Generous per-request bounds; [ClientNetworks.validateList] owns the 16-entry cap. */
+        const val MAX_NETWORK_ENTRIES = 64
+        const val MAX_NETWORK_CHARS = 64
     }
 }

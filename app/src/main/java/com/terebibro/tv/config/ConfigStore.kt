@@ -2,6 +2,7 @@ package com.terebibro.tv.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.security.TokenStorage
 import org.json.JSONArray
@@ -55,6 +56,19 @@ class ConfigStore(context: Context) {
         set(value) = prefs.edit().putBoolean(KEY_SETUP_DONE, value).apply()
 
     /**
+     * Additional trusted client networks (normalised `a.b.c.d/len` CIDR strings)
+     * beyond the device's own subnet, empty by default. Stored as a JSON array
+     * and written with the same `apply()` durability as the other settings; the
+     * value is normalised on both read and write so a malformed or host-bit form
+     * can never reach the peer policy.
+     */
+    var extraClientNetworks: List<String>
+        get() = readExtraClientNetworks()
+        set(value) = prefs.edit()
+            .putString(KEY_EXTRA_NETWORKS, JSONArray(normaliseNetworks(value)).toString())
+            .apply()
+
+    /**
      * Sanitised DNS label for mDNS, without the `.local` suffix. Device names are
      * user supplied ("Living Room TV"), so they are lowercased, reduced to
      * `[a-z0-9-]`, trimmed of leading/trailing hyphens and capped at 63 chars.
@@ -96,6 +110,23 @@ class ConfigStore(context: Context) {
         return prefs.edit().putString(KEY_PAIRED_TOKENS, array.toString()).commit()
     }
 
+    private fun readExtraClientNetworks(): List<String> {
+        val raw = prefs.getString(KEY_EXTRA_NETWORKS, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            normaliseNetworks(List(array.length()) { array.optString(it) })
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Normalises to valid CIDR strings, dropping anything unparseable, de-duplicated in order. */
+    private fun normaliseNetworks(values: List<String>): List<String> {
+        val result = LinkedHashSet<String>()
+        for (value in values) ClientNetworks.normalise(value)?.let { result.add(it) }
+        return result.toList().take(ClientNetworks.MAX_ENTRIES)
+    }
+
     private fun readTokens(): List<PairedToken> {
         val raw = prefs.getString(KEY_PAIRED_TOKENS, null) ?: return emptyList()
         return try {
@@ -131,6 +162,7 @@ class ConfigStore(context: Context) {
         private const val KEY_RETRY_INTERVAL = "retryIntervalSec"
         private const val KEY_PAIRED_TOKENS = "pairedTokens"
         private const val KEY_SETUP_DONE = "setupDone"
+        private const val KEY_EXTRA_NETWORKS = "extraClientNetworks"
 
         const val DEFAULT_HOME_URL = "https://example.com"
         const val DEFAULT_DEVICE_NAME = "terebi-tv"

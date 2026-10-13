@@ -110,6 +110,18 @@
       <button id="savePort">Save</button>
     </div>
 
+    <p class="warn">Trusted networks widen who can reach the pairing prompt from
+    outside the TV's own subnet. The pairing PIN and bearer tokens still gate
+    every actual control action; an unpaired device that reaches the page can
+    only see the pairing screen.</p>
+    <label for="networkInput">Add trusted network (IPv4 CIDR, e.g. 10.10.1.0/24)</label>
+    <div class="row">
+      <input id="networkInput" type="text" inputmode="text" class="grow" autocomplete="off" placeholder="10.10.1.0/24">
+      <button id="addNetwork">Add</button>
+    </div>
+    <p id="networkError" class="error"></p>
+    <ul id="networkList" class="netlist"></ul>
+
     <label class="check"><input id="fullscreenToggle" type="checkbox"> Fullscreen</label>
     <label class="check"><input id="keepAwakeToggle" type="checkbox"> Keep Screen Awake</label>
   </section>
