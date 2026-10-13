@@ -10,6 +10,10 @@ import java.io.InputStream
  * level must be an object, unknown and duplicate keys are rejected, only scalar
  * values are accepted and trailing data is refused. Any violation is a
  * [BadJson], which routes map to HTTP 400.
+ *
+ * Arrays are refused by default. A route may name specific keys in [arrayKeys]
+ * to accept a *string* array for those keys only (used by the trusted-networks
+ * setting); the array may contain string literals and nothing else.
  */
 object Json {
 
@@ -20,16 +24,23 @@ object Json {
         data class Bool(val value: Boolean) : Value()
         data class Num(val value: Double) : Value()
         object Null : Value()
+
+        /** A string array, only produced for keys explicitly listed in `arrayKeys`. */
+        data class StrList(val items: List<String>) : Value()
     }
 
-    fun parseObject(input: InputStream, allowedKeys: Set<String>): Map<String, Value> =
-        Parser(input.readBytes().toString(Charsets.UTF_8)).parseObject(allowedKeys)
+    fun parseObject(
+        input: InputStream,
+        allowedKeys: Set<String>,
+        arrayKeys: Set<String> = emptySet()
+    ): Map<String, Value> =
+        Parser(input.readBytes().toString(Charsets.UTF_8)).parseObject(allowedKeys, arrayKeys)
 
     private class Parser(private val text: String) {
 
         private var pos = 0
 
-        fun parseObject(allowedKeys: Set<String>): Map<String, Value> {
+        fun parseObject(allowedKeys: Set<String>, arrayKeys: Set<String>): Map<String, Value> {
             skipWs()
             expect('{')
             val result = LinkedHashMap<String, Value>()
@@ -48,7 +59,7 @@ object Json {
                 skipWs()
                 expect(':')
                 skipWs()
-                result[name] = parseScalar()
+                result[name] = if (arrayKeys.contains(name)) parseStringArray() else parseScalar()
                 skipWs()
                 when (cur()) {
                     ',' -> pos++
@@ -62,6 +73,32 @@ object Json {
             skipWs()
             requireEnd()
             return result
+        }
+
+        /** A `[ "a", "b" ]` array of string literals only; nesting is refused. */
+        private fun parseStringArray(): Value.StrList {
+            expect('[')
+            skipWs()
+            val items = mutableListOf<String>()
+            if (peek() == ']') {
+                pos++
+                return Value.StrList(items)
+            }
+            while (true) {
+                skipWs()
+                if (cur() != '"') throw BadJson("bad_array_item")
+                items.add(parseString())
+                skipWs()
+                when (cur()) {
+                    ',' -> pos++
+                    ']' -> {
+                        pos++
+                        break
+                    }
+                    else -> throw BadJson("malformed_json")
+                }
+            }
+            return Value.StrList(items)
         }
 
         private fun parseScalar(): Value = when (cur()) {
@@ -197,5 +234,22 @@ object Json {
         val value = values[key] as? Value.Num ?: throw BadJson("missing_or_wrong_type:$key")
         if (value.value % 1.0 != 0.0) throw BadJson("not_integer:$key")
         return value.value.toInt()
+    }
+
+    /**
+     * A string array supplied for a key listed in `arrayKeys`. Throws when the
+     * key is absent, not an array, contains a non-string item, exceeds
+     * [maxItems] or any item exceeds [maxLength] characters.
+     */
+    fun requireStringList(
+        values: Map<String, Value>,
+        key: String,
+        maxItems: Int,
+        maxLength: Int
+    ): List<String> {
+        val list = values[key] as? Value.StrList ?: throw BadJson("missing_or_wrong_type:$key")
+        if (list.items.size > maxItems) throw BadJson("too_many:$key")
+        for (item in list.items) if (item.length > maxLength) throw BadJson("too_long:$key")
+        return list.items
     }
 }

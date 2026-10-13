@@ -24,5 +24,7 @@ data class BrowserState(
     val androidVersion: String,
     val sdkInt: Int,
     val uptimeMs: Long,
-    val seq: Long
+    val seq: Long,
+    /** Extra trusted client networks beyond the device's own subnet. */
+    val extraNetworks: List<String> = emptyList()
 )

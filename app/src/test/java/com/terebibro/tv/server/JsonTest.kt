@@ -87,4 +87,71 @@ class JsonTest {
         assertThrows(Json.BadJson::class.java) { Json.requireInt(parse("""{"a":1.5}"""), "a") }
         assertEquals(7, Json.requireInt(parse("""{"a":7}"""), "a"))
     }
+
+    // ------------------------------------------------------ opt-in string arrays
+
+    private fun parseArray(
+        json: String,
+        allowed: Set<String> = setOf("a", "b", "c"),
+        arrayKeys: Set<String> = allowed
+    ) = Json.parseObject(
+        ByteArrayInputStream(json.toByteArray(Charsets.UTF_8)),
+        allowed,
+        arrayKeys
+    )
+
+    @Test
+    fun `an array is rejected by default`() {
+        assertBad { parse("""{"a":["x"]}""") }
+    }
+
+    @Test
+    fun `an array is rejected for a key not named in arrayKeys`() {
+        assertBad { parseArray("""{"a":["x"]}""", allowed = setOf("a", "b"), arrayKeys = setOf("b")) }
+    }
+
+    @Test
+    fun `an array is accepted only for a key named in arrayKeys`() {
+        val values = parseArray("""{"a":["x","y"]}""")
+        assertEquals(listOf("x", "y"), (values["a"] as Json.Value.StrList).items)
+        assertEquals(listOf("x", "y"), Json.requireStringList(values, "a", 5, 10))
+
+        val empty = parseArray("""{"a":[]}""")
+        assertEquals(emptyList<String>(), (empty["a"] as Json.Value.StrList).items)
+    }
+
+    @Test
+    fun `a scalar or null for an array key is rejected`() {
+        // The key is an array key, so a scalar or null value is a parse error.
+        assertBad { parseArray("""{"a":"10.0.0.0/8"}""") }
+        assertBad { parseArray("""{"a":null}""") }
+        assertBad { parseArray("""{"a":42}""") }
+
+        // And requireStringList refuses a value that is not an array at all.
+        assertThrows(Json.BadJson::class.java) {
+            Json.requireStringList(parse("""{"a":"x"}"""), "a", 5, 20)
+        }
+    }
+
+    @Test
+    fun `a nested array or a non string item is rejected`() {
+        assertBad { parseArray("""{"a":[[1]]}""") }
+        assertBad { parseArray("""{"a":[1]}""") }
+        assertBad { parseArray("""{"a":["x",2]}""") }
+    }
+
+    @Test
+    fun `duplicate and unknown array keys are still rejected`() {
+        assertBad { parseArray("""{"a":[],"a":[]}""") }
+        assertBad { parseArray("""{"z":[]}""") }
+    }
+
+    @Test
+    fun `requireStringList rejects too many and over-long items`() {
+        val many = parseArray("""{"a":["1","2","3"]}""")
+        assertThrows(Json.BadJson::class.java) { Json.requireStringList(many, "a", 2, 10) }
+
+        val longItem = parseArray("""{"a":["123456"]}""")
+        assertThrows(Json.BadJson::class.java) { Json.requireStringList(longItem, "a", 5, 3) }
+    }
 }

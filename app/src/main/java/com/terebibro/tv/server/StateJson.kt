@@ -1,6 +1,7 @@
 package com.terebibro.tv.server
 
 import com.terebibro.tv.web.BrowserState
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Serializes the shared [BrowserState] snapshot; used by REST and WebSocket. */
@@ -28,6 +29,7 @@ object StateJson {
         obj.put("sdkInt", state.sdkInt)
         obj.put("uptimeMs", state.uptimeMs)
         obj.put("seq", state.seq)
+        obj.put("extraNetworks", JSONArray(state.extraNetworks))
         return obj
     }
 }

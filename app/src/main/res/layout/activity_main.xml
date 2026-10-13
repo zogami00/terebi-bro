@@ -105,6 +105,45 @@
                 android:layout_marginTop="8dp"
                 android:text="@string/revoke_devices" />
 
+            <!--
+              Bootstrap for the "extra trusted networks" setting: a client whose
+              subnet is blocked cannot reach the controller to configure it, so
+              the refused addresses are listed here with a one-press allow.
+            -->
+            <TextView
+                android:id="@+id/info_blocked_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:textSize="18sp"
+                android:textColor="#FFD166"
+                android:visibility="gone"
+                android:text="@string/blocked_clients" />
+
+            <LinearLayout
+                android:id="@+id/info_blocked_list"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/info_networks_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:textSize="18sp"
+                android:textColor="#FFFFFF"
+                android:visibility="gone"
+                android:text="@string/trusted_networks" />
+
+            <LinearLayout
+                android:id="@+id/info_networks_list"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center" />
+
             <Button
                 android:id="@+id/info_start_button"
                 android:layout_width="wrap_content"

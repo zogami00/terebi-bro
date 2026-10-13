@@ -12,4 +12,8 @@
     <string name="website_unavailable">Website unavailable</string>
     <string name="retry_now">Retry Now</string>
     <string name="home">Home</string>
+    <string name="blocked_clients">Blocked clients — press Allow to trust their network</string>
+    <string name="trusted_networks">Trusted networks</string>
+    <string name="allow_network">Allow %1$s</string>
+    <string name="remove_network">Remove %1$s</string>
 </resources>

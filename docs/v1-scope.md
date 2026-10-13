@@ -28,7 +28,8 @@ What the first release ships, and what was intentionally left out.
 - REST surface: `/api/info`, `/api/pair`, `/api/unpair`, `/api/state`,
   `/api/device`, `/api/nav/open`, `/api/home`, `/api/nav/{home,back,forward,reload,stop}`,
   `/api/webview/{restart,clear-cache,clear-site-data}`, `/api/display`,
-  `/api/dpad`, `/api/settings/device-name`, `/api/settings/port`.
+  `/api/dpad`, `/api/settings/device-name`, `/api/settings/port`,
+  `/api/settings/networks`.
 - WebSocket at `/ws` with 250 ms-coalesced state broadcasts, heartbeat and
   in-band authentication.
 - Debug-only (`BuildConfig.DEBUG`) emulator affordance: the server also binds
@@ -81,6 +82,44 @@ certainly older than Chromium 100, so modern CSS may render as unstyled HTML.
 The advisory WebView warning fires on such a device — that is intended, and it
 never blocks the browser.
 
+## Deviation: extra trusted client networks
+
+The spec (§19) requires "local-network binding only": the controller is
+reachable only from the TV's own subnet. V1 extends this with an **opt-in,
+default-empty** list of additional trusted IPv4 networks (`extraClientNetworks`,
+managed from the controller under **Settings** and via
+`GET`/`POST /api/settings/networks`).
+
+**Why.** A TV and its controller are not always on the same subnet — a TV at
+`10.10.30.10` and a PC at `10.10.1.10` cannot reach each other under the strict
+policy, so the user cannot even open the controller to configure anything. The
+list makes the controller reachable from such a network (for example an admin
+VLAN).
+
+**The trade-off, stated plainly.** Reachability changes from **L2-adjacent** to
+**routed**: any host that can route to the TV from within a trusted range is
+admitted, not only the devices on the TV's own broadcast domain. An admitted
+peer can reach `/api/pair`, `/api/info` and the WebSocket handshake. The
+pairing PIN, the bearer token, the CSRF header, the Host/Origin checks, the
+per-token/per-peer rate limits and the connection caps all still apply, so an
+admitted-but-unpaired device cannot control the TV. But it **can drive the
+global PIN lockout**: five failed `/api/pair` attempts lock pairing for
+everyone, escalating on repeat to 15 minutes — a pairing denial of service from
+anywhere in the trusted range. Keep the setting as narrow as the layout
+actually requires. The blast radius is bounded deliberately:
+
+- Only **non-globally-routable** ranges are accepted: RFC1918 (`10/8`,
+  `172.16/12`, `192.168/16`), CGNAT (`100.64/10`) and link-local (`169.254/16`).
+  A public network such as `1.0.0.0/8` is refused. A prefix broader than **/8**
+  is refused, and input must be **canonical**: host bits set is rejected with
+  the correct form named (`10.10.1.10/24` → `10.10.1.0/24`) rather than
+  silently widened. The list is capped at **16** entries.
+- The setting is **empty by default**, so the shipped behaviour is identical to
+  "local-network binding only".
+- Because the blocked subnet cannot reach the controller to configure it, the TV
+  setup overlay lists recently-blocked client networks (in memory only, never
+  persisted or logged) with a one-press allow of the containing /24.
+
 ## Deliberately deferred
 
 - **Native long-press-Back menu (§15)** and **Enter URL from TV (§16).** The
@@ -100,7 +139,7 @@ never blocks the browser.
 
 ## Verification
 
-Compiled, JVM-unit-tested (`116` tests), linted (`0` errors) and built as a
+Compiled, JVM-unit-tested (`150` tests), linted (`0` errors) and built as a
 signed release.
 
 **Verified end-to-end by the maintainer on the reference Android 9 (API 28)

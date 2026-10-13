@@ -1,7 +1,9 @@
 package com.terebibro.tv.server
 
 import com.terebibro.tv.config.ConfigStore
+import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.net.LocalNetwork
+import com.terebibro.tv.net.RecentlyBlockedPeers
 import com.terebibro.tv.net.SubnetMatcher
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.security.PinManager
@@ -50,6 +52,9 @@ class AuthManager(
     private val apiLimiter = RateLimiter(ratePerSecond = 20.0, burst = 20)
     private val dpadLimiter = RateLimiter(ratePerSecond = 100.0, burst = 100)
 
+    /** Addresses most recently refused by [isPeerAllowed]; in-memory only, never persisted. */
+    private val recentlyBlocked = RecentlyBlockedPeers()
+
     // ---------------------------------------------------------------------
     // Host / peer / origin
     // ---------------------------------------------------------------------
@@ -68,9 +73,33 @@ class AuthManager(
         return allowedHosts(ip, port, config.mdnsName, allowLocalhost)
     }
 
-    /** Loopback, own-address and off-subnet peers are rejected. */
-    fun isPeerAllowed(peerIp: String?): Boolean =
-        isPeerAllowed(peerIp, localNetwork.current(), allowLocalhost)
+    /**
+     * Loopback, own-address and off-subnet peers are rejected, unless the peer
+     * falls inside one of the configured extra trusted client networks. Rejected
+     * peers that could plausibly be a real controller — a valid, non-loopback
+     * IPv4 address that is not the device's own — are recorded for the TV
+     * overlay's one-press allow (see [blockedPeers]); peer addresses are never
+     * logged.
+     *
+     * The trusted list only widens who may *reach* the pairing prompt. Every
+     * other control (PIN, token, CSRF, Host/Origin, rate limits, connection
+     * caps) still applies to a peer admitted this way.
+     */
+    fun isPeerAllowed(peerIp: String?): Boolean {
+        val info = localNetwork.current()
+        val allowed = isPeerAllowed(peerIp, info, allowLocalhost, config.extraClientNetworks)
+        if (!allowed && isRecordablePeer(peerIp, info)) recentlyBlocked.record(peerIp.orEmpty())
+        return allowed
+    }
+
+    /** Addresses most recently refused by [isPeerAllowed], most recent first. */
+    fun blockedPeers(): List<RecentlyBlockedPeers.Blocked> = recentlyBlocked.snapshot()
+
+    /** Clears the in-memory recently-blocked list (the only place it is exposed). */
+    fun clearBlockedPeers() = recentlyBlocked.clear()
+
+    /** The configured extra trusted client networks, normalised. */
+    val extraClientNetworks: List<String> get() = config.extraClientNetworks
 
     fun isHostAllowed(host: String?): Boolean = HostMatcher.isHostAllowed(host, allowedHosts())
 
@@ -161,18 +190,38 @@ class AuthManager(
         /**
          * Loopback, own-address and off-subnet peers are rejected. When
          * [allowLocalhost] is true (debug only) a loopback peer is accepted
-         * instead of rejected; everything else is unchanged.
+         * instead of rejected. A peer not in the device's own subnet is also
+         * accepted when it falls inside one of [extraNetworks]; everything else
+         * is unchanged, and with an empty [extraNetworks] this behaves exactly as
+         * it did before the setting existed.
          */
         fun isPeerAllowed(
             peerIp: String?,
             info: LocalNetwork.Info?,
-            allowLocalhost: Boolean
+            allowLocalhost: Boolean,
+            extraNetworks: List<String> = emptyList()
         ): Boolean {
             if (peerIp.isNullOrEmpty()) return false
             if (SubnetMatcher.isLoopback(peerIp)) return allowLocalhost
             if (info == null) return false
             if (peerIp == info.ip) return false
-            return SubnetMatcher.isSameSubnet(peerIp, info.ip, info.prefixLength)
+            if (SubnetMatcher.isSameSubnet(peerIp, info.ip, info.prefixLength)) return true
+            return extraNetworks.any { ClientNetworks.contains(it, peerIp) }
+        }
+
+        /**
+         * Whether a refused peer should be surfaced on the TV's one-press allow
+         * list. Only a well-formed, non-loopback IPv4 address that is not the
+         * device's own address qualifies: an unparseable address, a loopback
+         * probe or the TV itself would otherwise pollute the list with entries a
+         * one-press allow can never usefully admit.
+         */
+        fun isRecordablePeer(peerIp: String?, info: LocalNetwork.Info?): Boolean {
+            if (peerIp.isNullOrEmpty()) return false
+            if (SubnetMatcher.parseIpv4(peerIp) == null) return false
+            if (SubnetMatcher.isLoopback(peerIp)) return false
+            if (info != null && peerIp == info.ip) return false
+            return true
         }
 
         /**

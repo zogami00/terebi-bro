@@ -25,6 +25,7 @@ import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
+import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.net.LocalNetwork
 import com.terebibro.tv.server.ApiResult
 import com.terebibro.tv.server.ApiRoutes
@@ -63,6 +64,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
     private lateinit var infoWebViewWarning: TextView
     private lateinit var infoPairButton: Button
     private lateinit var infoRevokeButton: Button
+    private lateinit var infoBlockedHeader: TextView
+    private lateinit var infoBlockedList: LinearLayout
+    private lateinit var infoNetworksHeader: TextView
+    private lateinit var infoNetworksList: LinearLayout
     private lateinit var infoStartButton: Button
     private lateinit var infoExitButton: Button
     private lateinit var errorCountdown: TextView
@@ -249,6 +254,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         infoWebViewWarning = findViewById(R.id.info_webview_warning)
         infoPairButton = findViewById(R.id.info_pair_button)
         infoRevokeButton = findViewById(R.id.info_revoke_button)
+        infoBlockedHeader = findViewById(R.id.info_blocked_header)
+        infoBlockedList = findViewById(R.id.info_blocked_list)
+        infoNetworksHeader = findViewById(R.id.info_networks_header)
+        infoNetworksList = findViewById(R.id.info_networks_list)
         infoStartButton = findViewById(R.id.info_start_button)
         infoExitButton = findViewById(R.id.info_exit)
         errorCountdown = findViewById(R.id.error_countdown)
@@ -331,6 +340,83 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
         } else {
             infoWebViewWarning.visibility = View.GONE
         }
+
+        updateNetworkControls()
+    }
+
+    /**
+     * Renders the two dynamic TV-side lists that bootstrap the extra trusted
+     * networks setting. Both containers are rebuilt on each refresh so the
+     * overlay always reflects the current configuration; every button is
+     * focusable, keeping the overlay D-pad navigable.
+     */
+    private fun updateNetworkControls() {
+        // The rebuild below removes and re-adds every dynamic button, so a focused
+        // button would be detached and focus would fall back to the top. Remember
+        // which section owned focus and restore it afterwards.
+        val focused = currentFocus
+        val focusWasInBlocked = isWithin(focused, infoBlockedList)
+        val focusWasInNetworks = isWithin(focused, infoNetworksList)
+
+        val blocked = if (::auth.isInitialized) auth.blockedPeers() else emptyList()
+        infoBlockedList.removeAllViews()
+        var suggestionsShown = 0
+        for (client in blocked) {
+            val suggestion = ClientNetworks.containingNetworkFor(client.ip) ?: continue
+            val button = Button(this)
+            button.text = getString(R.string.allow_network, suggestion)
+            button.setOnClickListener { allowNetwork(suggestion) }
+            infoBlockedList.addView(button)
+            suggestionsShown++
+        }
+        infoBlockedHeader.visibility = if (suggestionsShown > 0) View.VISIBLE else View.GONE
+
+        val networks = config.extraClientNetworks
+        infoNetworksList.removeAllViews()
+        for (network in networks) {
+            val button = Button(this)
+            button.text = getString(R.string.remove_network, network)
+            button.setOnClickListener { removeNetwork(network) }
+            infoNetworksList.addView(button)
+        }
+        infoNetworksHeader.visibility = if (networks.isEmpty()) View.GONE else View.VISIBLE
+
+        // Re-request focus on the first remaining dynamic button in the section that
+        // held it, falling back to the start button when that section is now empty.
+        if (focusWasInBlocked || focusWasInNetworks) {
+            val section = if (focusWasInBlocked) infoBlockedList else infoNetworksList
+            (section.getChildAt(0) ?: infoStartButton).requestFocus()
+        }
+    }
+
+    /** True when [view] is [section] itself or one of its descendants. */
+    private fun isWithin(view: View?, section: LinearLayout): Boolean {
+        var current: View? = view
+        while (current != null) {
+            if (current === section) return true
+            val parent = current.parent
+            current = if (parent is View) parent else null
+        }
+        return false
+    }
+
+    /** One-press allow from the TV overlay; no CIDR typing on a remote. */
+    private fun allowNetwork(cidr: String) {
+        val current = config.extraClientNetworks
+        // Enforce the hard cap on the TV path too: refuse a brand-new entry once
+        // the list is full, but still allow a no-op re-add of an existing entry.
+        if (cidr !in current && current.size >= ClientNetworks.MAX_ENTRIES) return
+        config.extraClientNetworks = (current + cidr).distinct()
+        // The peer is now admitted, so the bootstrap list has served its purpose.
+        auth.clearBlockedPeers()
+        wsHub.broadcastState()
+        updateInfoOverlay()
+    }
+
+    private fun removeNetwork(cidr: String) {
+        config.extraClientNetworks = config.extraClientNetworks.filterNot { it == cidr }
+        wsHub.broadcastState()
+        updateInfoOverlay()
     }
 
     private fun showErrorOverlay() {
@@ -674,7 +760,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost {
             androidVersion = deviceInfo.androidVersion,
             sdkInt = deviceInfo.sdkInt,
             uptimeMs = deviceInfo.uptimeMs,
-            seq = seq.get()
+            seq = seq.get(),
+            extraNetworks = config.extraClientNetworks
         )
     }
 

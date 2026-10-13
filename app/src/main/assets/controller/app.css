@@ -144,3 +144,14 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
   .status-grid { grid-template-columns: 1fr; }
   .status-grid dt { margin-top: 6px; }
 }
+
+.netlist { list-style: none; padding: 0; margin: 12px 0 0; }
+.netlist li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.netlist li span { word-break: break-all; }
