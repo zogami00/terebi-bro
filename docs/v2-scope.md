@@ -282,8 +282,12 @@ system font set. Cheap TV boxes ship stripped font sets and will render tofu
 missing, either bundle a subset font (APK size cost, stated before shipping) or
 fall back to English. Decided after the device check, not before.
 
-The proposed strings are **pending native-speaker review**. They are here so the
-review has something concrete to correct, not because they are final:
+The strings below are **machine-translated (Google Translate) and have not been
+reviewed by a native speaker.** The five strings are short, concrete and
+unambiguous in context, so machine translation is an acceptable starting point
+rather than a liability — but a wrong patient-facing label is a communication
+problem, not a cosmetic one, and having one staff member read them costs
+nothing:
 
 | key | ms | en | zh | ta |
 | --- | --- | --- | --- | --- |
@@ -451,6 +455,13 @@ factor, `renderScale = screenHeightDp / 1080`, is computed once and applied to
 native view dimensions, to the injected strip stylesheet and to the vendor
 page's `setInitialScale`. One factor, one place it is computed, and no other
 pixel value stored anywhere.
+
+**The design target is 1080p.** The app lays out for a 1080p surface and the
+television (or the platform's density scaling) upscales it to 4K. There is no 4K
+layout and adding one is out of scope. `renderScale` is therefore a one-line
+guard, not a feature: on a density-scaling 4K panel it evaluates to exactly `1.0`
+and changes nothing; it exists only so that a device reporting a *native* 2160 dp
+surface does not render the interface at half size.
 
 **Why dp and not px.** A 4K panel that density-scales reports 1080 dp and 2160
 *px*, so a px-based factor would double a layout the system had already scaled
@@ -674,6 +685,45 @@ announcement are audible.
 setting exists for exactly that; it is not an oversight that 100 is the default
 (the M1 demo is unintrusive only because the test clips are silent).
 
+### HLS, HEVC and Jellyfin
+
+Three things the media band is sometimes assumed to do and does not. They are
+grouped here because each one is answered by the same sentence: the supported set
+is MP4 (H.264/AAC), JPEG and PNG, and anything else is either a device property
+or a different feature.
+
+**HLS is not supported in V2.** The media band accepts MP4 (H.264/AAC), JPEG and
+PNG. Android's `MediaPlayer` does have platform HLS support (`m3u8`), so
+accepting `.m3u8` in the playlist is a candidate **experiment in M3** — same
+player, no new dependency — but HLS behaviour on TV boxes varies by vendor
+implementation and is not promised until measured. If adopted, the playlist
+validator gains the `.m3u8`/`video/mp2t` case and the `type` enum stays `video`,
+because the queue asks "video or still", not "how is the video packaged".
+
+**HEVC is not supported by the app, and cannot be added by the app.** Decoding is
+the SoC's hardware decoder; the app can only hand the file to it. A box whose
+`MediaCodec` reports HEVC may play it through `MediaPlayer` or ExoPlayer; a box
+without it does not gain the capability from any dependency choice. Do not
+describe ExoPlayer as adding HEVC.
+
+**Jellyfin is not the media band.** It is a web application, so it would run in
+the existing WebView as an ordinary page, playing HLS through `hls.js` over Media
+Source Extensions. That path is bounded by the device's WebView: the reference
+unit runs Chromium 66, which predates syntax the Jellyfin web client relies on
+(optional chaining, nullish coalescing, `Promise.allSettled`,
+`Array.prototype.at`), so it is **expected** to fail there and **expected** to
+work only on a device with a substantially newer WebView. It is also outside
+media mode — the split applies only on the configured QMS origin — so navigating
+to Jellyfin returns the browser to full screen and the queue band is not shown.
+
+**What would support HLS properly** is `androidx.media3`/ExoPlayer in the media
+band: HLS and DASH parsing, correct fragmented-MP4 and audio-track handling,
+better buffering. It does not add HEVC. It carries the dependency and
+decode-path change this scope deliberately avoids — see
+[Deviation: framework `MediaPlayer`, not `androidx.media3`](#deviation-framework-mediaplayer-not-androidxmedia3)
+— and it is the upgrade path if the clinic ever wants Jellyfin or another HLS
+source on the signage loop rather than in the browser.
+
 ## Media upload
 
 Reuses the existing authenticated control server. `POST /api/media/upload`,
@@ -882,8 +932,10 @@ on the reference TV.
 | **M4** Chime, integrations, docs | Audio hook, audio-focus matrix, MQTT actions + HA entities, soak fixes, README updates. | `callSource=dom_or_audio` flips on the chime. |
 
 Nothing in M2 depends on M3. M2 ships the labels in Malay, the default, which
-needs no review; `en`/`zh`/`ta` are pending native-speaker review and arrive in
-M3.
+needs no human review; `en`/`zh`/`ta` are machine-translated (see
+[Extension: signage language selector](#extension-signage-language-selector)) and
+arrive in M3, and reading them once with a staff member is cheap enough that it
+should not be skipped.
 
 ## Risks
 
@@ -931,7 +983,9 @@ mocks; the decision is extracted into an object and tested exhaustively:
 - `QmsScriptTest` — selector and string escaping, CSS custom-property emission,
   idempotent install.
 - `SignageStringsTest` — dictionary completeness for every shipped language
-  (Malay in M2, all four in M3), no blanks, no missing or extra keys.
+  (Malay in M2, all four in M3), no blanks, no missing or extra keys. It proves
+  the dictionary is complete, not that the translation is right; no test does
+  that, which is why one staff read of the five strings is the real gate.
 - `MediaKeyGuardTest` — which keys are consumed in which mode.
 - `BodyFramingTest` additions — the binary path beside the untouched JSON path.
 - `StateJsonMediaTest` — the new fields, including the absence of `qmsNext`.
@@ -972,7 +1026,9 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
 ## Deliberately deferred
 
 - **HLS / DASH / HEVC / AV1.** The framework decoder path is H.264/AAC in MP4,
-  plus JPEG and PNG stills, and that is what signage needs.
+  plus JPEG and PNG stills, and that is what signage needs. See
+  [HLS, HEVC and Jellyfin](#hls-hevc-and-jellyfin) for what each one would
+  actually require and why none of it is a dependency swap.
 - **`Range` / seek in preview.** Previews are short; seeking is a controller
   feature nobody has asked for.
 - **Thumbnails.** The controller lists names and sizes, not frames.
