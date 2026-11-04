@@ -2,6 +2,8 @@ package com.terebibro.tv.config
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.terebibro.tv.media.MediaSettings
+import com.terebibro.tv.media.MediaSettingsRecovery
 import com.terebibro.tv.mqtt.MqttSettings
 import com.terebibro.tv.mqtt.MqttTopics
 import com.terebibro.tv.mqtt.MqttUpdate
@@ -166,6 +168,65 @@ class ConfigStore(context: Context) {
         editor.commit()
     }
 
+    // ---------------------------------------------------------------------
+    // Media mode (off by default; behaviour is V1 while it is off)
+    // ---------------------------------------------------------------------
+
+    /**
+     * The effective media settings, recovered field by field from the stored
+     * blob (see [MediaSettingsRecovery]). A single bad value falls back to its
+     * own default and never discards the rest of the settings.
+     *
+     * A blank stored QMS URL is reported as the Home URL so enabling media mode
+     * without configuring one targets the dashboard; the blank stays stored, so
+     * it keeps tracking later Home URL changes.
+     */
+    val mediaSettings: MediaSettings
+        get() = MediaSettingsRecovery.recover(HashMap(prefs.all), homeUrl)
+
+    /**
+     * The merge base for `POST /api/settings/media`: the same stored blob, but
+     * with a blank QMS URL left blank. Validating and persisting against this
+     * view keeps the read-time Home URL substitution from being written back,
+     * so a blank value keeps tracking later Home URL changes.
+     */
+    val mediaSettingsForUpdate: MediaSettings
+        get() = MediaSettingsRecovery.recover(HashMap(prefs.all))
+
+    /** Writes every media setting in one durable edit, mirroring [applyMqttUpdate]. */
+    fun applyMediaUpdate(settings: MediaSettings) {
+        val editor = prefs.edit()
+        editor.putBoolean(KEY_MEDIA_ENABLED, settings.enabled)
+        editor.putString(KEY_MEDIA_QMS_URL, settings.qmsUrl)
+        editor.putString(KEY_MEDIA_QMS_STRIP_SELECTOR, settings.qmsStripSelector)
+        editor.putString(KEY_MEDIA_QMS_NUMBER_SELECTOR, settings.qmsNumberSelector)
+        editor.putString(KEY_MEDIA_QMS_LOCATION_SELECTOR, settings.qmsLocationSelector)
+        editor.putString(KEY_MEDIA_QMS_TIME_SELECTOR, settings.qmsTimeSelector)
+        editor.putString(KEY_MEDIA_CALL_SOURCE, settings.callSource.wire)
+        editor.putInt(KEY_MEDIA_DWELL_SEC, settings.dwellSec)
+        editor.putInt(KEY_MEDIA_SPLIT_PERCENT, settings.mediaSplitPercent)
+        editor.putInt(KEY_MEDIA_HEADER_PERCENT, settings.headerBandPercent)
+        editor.putInt(KEY_MEDIA_STRIP_PERCENT, settings.stripHeightPercent)
+        editor.putInt(KEY_MEDIA_CURRENT_NUMBER_PX, settings.currentNumberPx)
+        editor.putInt(KEY_MEDIA_HISTORY_NUMBER_PX, settings.historyNumberPx)
+        editor.putInt(KEY_MEDIA_LABEL_PX, settings.labelPx)
+        editor.putInt(KEY_MEDIA_CURRENT_CARD_PX, settings.currentCardPx)
+        editor.putInt(KEY_MEDIA_HISTORY_CARD_MIN_PX, settings.historyCardMinPx)
+        editor.putInt(KEY_MEDIA_HISTORY_CARD_MAX_PX, settings.historyCardMaxPx)
+        editor.putString(KEY_MEDIA_UI_LANGUAGE, settings.uiLanguage.wire)
+        editor.putBoolean(KEY_MEDIA_LOCAL_ENABLED, settings.mediaLocalEnabled)
+        editor.putBoolean(KEY_MEDIA_PLAYLIST_ENABLED, settings.playlistEnabled)
+        editor.putString(KEY_MEDIA_PLAYLIST_URL, settings.playlistUrl)
+        editor.putInt(KEY_MEDIA_PLAYLIST_REFRESH_SEC, settings.playlistRefreshSec)
+        editor.putInt(KEY_MEDIA_IMAGE_DURATION_SEC, settings.imageDurationSec)
+        editor.putInt(KEY_MEDIA_VOLUME_PERCENT, settings.volumePercent)
+        editor.putString(KEY_MEDIA_FILL_MODE, settings.mediaFillMode.wire)
+        editor.putBoolean(KEY_MEDIA_NEW_CALL_HIGHLIGHT, settings.newCallHighlight)
+        editor.putString(KEY_MEDIA_STRIP_POSITION, settings.stripPosition.wire)
+        editor.putInt(KEY_MEDIA_UI_SCALE, settings.uiScale)
+        editor.commit()
+    }
+
     /** Durable storage adapter for the paired-controller registry. */
     val tokenStorage: TokenStorage = object : TokenStorage {
         override fun load(): List<PairedToken> = readTokens()
@@ -264,6 +325,35 @@ class ConfigStore(context: Context) {
         private const val KEY_MQTT_DISCOVERY_ENABLED = "mqttDiscoveryEnabled"
         private const val KEY_MQTT_DISCOVERY_PREFIX = "mqttDiscoveryPrefix"
         private const val KEY_MQTT_LAST_DISCOVERY_PREFIX = "mqttLastDiscoveryPrefix"
+
+        private const val KEY_MEDIA_ENABLED = MediaSettingsRecovery.Keys.ENABLED
+        private const val KEY_MEDIA_QMS_URL = MediaSettingsRecovery.Keys.QMS_URL
+        private const val KEY_MEDIA_QMS_STRIP_SELECTOR = MediaSettingsRecovery.Keys.QMS_STRIP_SELECTOR
+        private const val KEY_MEDIA_QMS_NUMBER_SELECTOR = MediaSettingsRecovery.Keys.QMS_NUMBER_SELECTOR
+        private const val KEY_MEDIA_QMS_LOCATION_SELECTOR = MediaSettingsRecovery.Keys.QMS_LOCATION_SELECTOR
+        private const val KEY_MEDIA_QMS_TIME_SELECTOR = MediaSettingsRecovery.Keys.QMS_TIME_SELECTOR
+        private const val KEY_MEDIA_CALL_SOURCE = MediaSettingsRecovery.Keys.CALL_SOURCE
+        private const val KEY_MEDIA_DWELL_SEC = MediaSettingsRecovery.Keys.DWELL_SEC
+        private const val KEY_MEDIA_SPLIT_PERCENT = MediaSettingsRecovery.Keys.SPLIT_PERCENT
+        private const val KEY_MEDIA_HEADER_PERCENT = MediaSettingsRecovery.Keys.HEADER_PERCENT
+        private const val KEY_MEDIA_STRIP_PERCENT = MediaSettingsRecovery.Keys.STRIP_PERCENT
+        private const val KEY_MEDIA_CURRENT_NUMBER_PX = MediaSettingsRecovery.Keys.CURRENT_NUMBER_PX
+        private const val KEY_MEDIA_HISTORY_NUMBER_PX = MediaSettingsRecovery.Keys.HISTORY_NUMBER_PX
+        private const val KEY_MEDIA_LABEL_PX = MediaSettingsRecovery.Keys.LABEL_PX
+        private const val KEY_MEDIA_CURRENT_CARD_PX = MediaSettingsRecovery.Keys.CURRENT_CARD_PX
+        private const val KEY_MEDIA_HISTORY_CARD_MIN_PX = MediaSettingsRecovery.Keys.HISTORY_CARD_MIN_PX
+        private const val KEY_MEDIA_HISTORY_CARD_MAX_PX = MediaSettingsRecovery.Keys.HISTORY_CARD_MAX_PX
+        private const val KEY_MEDIA_UI_LANGUAGE = MediaSettingsRecovery.Keys.UI_LANGUAGE
+        private const val KEY_MEDIA_LOCAL_ENABLED = MediaSettingsRecovery.Keys.LOCAL_ENABLED
+        private const val KEY_MEDIA_PLAYLIST_ENABLED = MediaSettingsRecovery.Keys.PLAYLIST_ENABLED
+        private const val KEY_MEDIA_PLAYLIST_URL = MediaSettingsRecovery.Keys.PLAYLIST_URL
+        private const val KEY_MEDIA_PLAYLIST_REFRESH_SEC = MediaSettingsRecovery.Keys.PLAYLIST_REFRESH_SEC
+        private const val KEY_MEDIA_IMAGE_DURATION_SEC = MediaSettingsRecovery.Keys.IMAGE_DURATION_SEC
+        private const val KEY_MEDIA_VOLUME_PERCENT = MediaSettingsRecovery.Keys.VOLUME_PERCENT
+        private const val KEY_MEDIA_FILL_MODE = MediaSettingsRecovery.Keys.FILL_MODE
+        private const val KEY_MEDIA_NEW_CALL_HIGHLIGHT = MediaSettingsRecovery.Keys.NEW_CALL_HIGHLIGHT
+        private const val KEY_MEDIA_STRIP_POSITION = MediaSettingsRecovery.Keys.STRIP_POSITION
+        private const val KEY_MEDIA_UI_SCALE = MediaSettingsRecovery.Keys.UI_SCALE
 
         const val DEFAULT_HOME_URL = "https://example.com"
         const val DEFAULT_DEVICE_NAME = "terebi-tv"

@@ -165,6 +165,62 @@
   </section>
 
   <section class="card">
+    <h2>Media</h2>
+    <p class="warn">Media mode changes what the TV shows. Leave it off until you
+    are in front of the TV and can see the result.</p>
+    <p id="mediaModeState" class="muted"></p>
+    <label class="check"><input id="mediaEnabledToggle" type="checkbox"> Enable media mode</label>
+
+    <label>Mode</label>
+    <div class="row wrap">
+      <button id="mediaModeQms">QMS only</button>
+      <button id="mediaModeMedia">Media only</button>
+      <button id="mediaModeSplit">Split</button>
+    </div>
+
+    <label for="mediaSplitInput">Media band %</label>
+    <input id="mediaSplitInput" type="number" min="55" max="85" autocomplete="off">
+
+    <label for="mediaHeaderInput">Header band %</label>
+    <input id="mediaHeaderInput" type="number" min="3" max="15" autocomplete="off">
+
+    <label for="mediaStripInput">Queue band %</label>
+    <input id="mediaStripInput" type="number" min="18" max="40" autocomplete="off">
+
+    <label for="mediaDwellInput">Dwell seconds</label>
+    <input id="mediaDwellInput" type="number" min="20" max="180" autocomplete="off">
+
+    <label for="mediaVolumeInput">Volume %</label>
+    <input id="mediaVolumeInput" type="number" min="0" max="100" autocomplete="off">
+
+    <label for="mediaImageDurationInput">Image duration (seconds)</label>
+    <input id="mediaImageDurationInput" type="number" min="3" max="120" autocomplete="off">
+
+    <label for="mediaFillModeInput">Fill mode</label>
+    <select id="mediaFillModeInput">
+      <option value="letterboxBlur">Letterbox with blurred fill</option>
+      <option value="letterbox">Letterbox</option>
+      <option value="cover">Cover (crops)</option>
+    </select>
+
+    <label for="mediaLanguageInput">Signage language</label>
+    <select id="mediaLanguageInput">
+      <option value="ms">Bahasa Melayu</option>
+      <option value="en">English</option>
+      <option value="zh">中文</option>
+      <option value="ta">தமிழ்</option>
+    </select>
+
+    <label for="mediaUiScaleInput">Vendor page scale %</label>
+    <input id="mediaUiScaleInput" type="number" min="80" max="200" autocomplete="off">
+
+    <div class="row">
+      <button id="saveMedia" class="primary">Save Media</button>
+    </div>
+    <p id="mediaError" class="error"></p>
+  </section>
+
+  <section class="card">
     <h2>Device</h2>
     <p id="webViewWarning" class="warn hidden"></p>
     <dl class="status-grid">

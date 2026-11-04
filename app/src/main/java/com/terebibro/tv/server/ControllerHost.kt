@@ -1,7 +1,12 @@
 package com.terebibro.tv.server
 
+import com.terebibro.tv.media.MediaMode
+import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.mqtt.MqttStatus
 import com.terebibro.tv.web.BrowserState
+
+/** Display metrics in dp, as the device reports them (not physical pixels). */
+data class ScreenMetrics(val widthDp: Int, val heightDp: Int, val densityDpi: Int)
 
 /**
  * The application-side operations the control API needs, implemented by
@@ -46,4 +51,20 @@ interface ControllerHost {
 
     /** Called after the persisted MQTT settings change, so the client reconnects. */
     fun onMqttSettingsChanged()
+
+    /** The persisted media settings, for `GET /api/settings/media`. */
+    fun mediaSettingsSnapshot(): MediaSettings
+
+    /**
+     * Applies a manual mode; `QMS_FOCUS` is refused, as is any mode while media
+     * mode is disabled. `QMS_ONLY` holds indefinitely, `MEDIA_ONLY` for
+     * `MANUAL_MEDIA_HOLD_MS`, and `SPLIT` drops the hold.
+     */
+    fun setMediaMode(mode: MediaMode): ApiResult
+
+    /** Called after the persisted media settings change, so the mode is re-derived. */
+    fun onMediaSettingsChanged()
+
+    /** The dp metrics the layout is authored against. */
+    fun screenMetrics(): ScreenMetrics
 }

@@ -120,6 +120,11 @@ class MqttStatusPayloadTest {
             "homeUrl", "fullscreen", "keepAwake", "deviceName", "ip", "port",
             "network", "webViewVersion", "webViewOutdated", "appVersion",
             "androidVersion", "sdkInt", "uptimeMs", "seq", "extraNetworks",
+            "mediaEnabled", "mediaMode", "mediaSource", "mediaItem", "mediaIndex",
+            "mediaCount", "mediaPaused", "mediaError", "qmsNow", "qmsLocation",
+            "qmsDetectionHealthy", "qmsLastCallAtMs", "documentStartSupported",
+            "mediaLocalFiles", "mediaLocalBytes", "mediaFreeBytes", "uiLanguage",
+            "screenWidthDp", "screenHeightDp", "densityDpi", "renderScale",
             "discoveryTopics", "discoveryError", "statusError"
         )
     }
