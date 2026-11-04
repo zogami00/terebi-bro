@@ -645,6 +645,8 @@ bodies and WebSocket `auth` messages are never logged.
 
 - `docs/implementation-plan.md` — the original implementation plan (verbatim).
 - `docs/v1-scope.md` — what V1 ships and what was deliberately deferred.
+- `docs/v2-scope.md` — what V2 (QMS + media) adds, the trade-off behind each
+  decision, and what it leaves out.
 
 ## Verification status
 
