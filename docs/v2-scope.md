@@ -26,13 +26,17 @@ Everything below is conditional on one switch. See
   [Deviation: media mode is off by default](#deviation-media-mode-is-off-by-default)).
 - Four display modes — `QMS_ONLY`, `MEDIA_ONLY`, `SPLIT`, `QMS_FOCUS` — decided
   by one pure reducer so the mode rules are unit-testable without Android.
-- `SPLIT` (the default when media mode is enabled) puts the QMS strip in a
-  bottom band under a letterboxed media band; `stripPosition` can put it on the
-  right instead for comparison on the real TV.
+- Media mode does not take the screen at launch: the app boots `QMS_ONLY` full
+  screen and reaches `SPLIT` only once the dashboard has actually rendered. See
+  [Boot and activation](#boot-and-activation).
+- `SPLIT` (the default once media mode is enabled and the dashboard is
+  rendering) puts the QMS strip in a bottom band under a letterboxed media
+  band; `stripPosition` can put it on the right instead for comparison on the
+  real TV.
 - Automatic promotion to `QMS_FOCUS` on a detected call, held for `dwellSec`
   (default 50 s) and then returned to the previous mode.
-- Manual mode override from the controller or MQTT, held for 600 s and then
-  expiring back to automatic behaviour.
+- Manual mode override from the controller or MQTT: `MEDIA_ONLY` holds for
+  30 minutes, `QMS_ONLY` is held indefinitely because the queue stays visible.
 
 **Call detection**
 
@@ -43,8 +47,9 @@ Everything below is conditional on one switch. See
   change.
 - Selector health is probed on every page load and published as
   `qmsDetectionHealthy`; a page that will not load falls back to `MEDIA_ONLY`,
-  and a selector that stops matching degrades the strip to a native card instead
-  of a stale or invented number.
+  a selector that stops matching after having matched degrades the strip to a
+  native card instead of a stale or invented number, and a selector that has
+  never matched since launch leaves the app in `QMS_ONLY` full screen.
 - An optional second signal from the page's chime (`callSource`,
   default `"dom"`).
 
@@ -56,6 +61,9 @@ Everything below is conditional on one switch. See
 - Optional HTTP playlist (`http`/`https` only), strictly parsed, cached
   last-good to disk; the local folder is the source whenever the playlist is
   unavailable or empty.
+- An ad-hoc URL (`POST /api/media/open`) that overrides the queue until another
+  source is chosen, for "play this one thing now" without staging a file on the
+  TV. See [Ad-hoc URL](#ad-hoc-url).
 - Upload, delete, list and preview from the controller, streamed to disk under
   quota, free-space reserve, magic bytes and a metadata check.
 
@@ -67,8 +75,8 @@ Everything below is conditional on one switch. See
 
 **Integrations**
 
-- Six new paths, seven method/path pairs, on the existing authenticated control
-  server.
+- Seven new paths, eight method/path pairs, on the existing authenticated
+  control server.
 - Additive MQTT actions and Home Assistant entities. No protocol change: the
   new state fields ride the existing single fan-out into `BrowserState` /
   `StateJson` / the WebSocket `state` broadcast / the retained `<base>/status`.
@@ -326,24 +334,74 @@ Transitions:
 
 | Event | From | To | Notes |
 | --- | --- | --- | --- |
-| Media mode enabled | `QMS_ONLY` | `SPLIT` | Default enabled state. |
+| Launch, before anything is checked | — | `QMS_ONLY` | Full screen, regardless of `mediaModeEnabled`. |
+| Media mode enabled | `QMS_ONLY` | `SPLIT` | Only once the strip selector has matched at least once since launch. |
+| Strip selector matches for the first time since launch | `QMS_ONLY` | `SPLIT` | The dashboard is rendering; the activation page is behind us. |
 | Call detected | `SPLIT` | `QMS_FOCUS` | Timer armed for `dwellSec`. |
 | Second call during `QMS_FOCUS` | `QMS_FOCUS` | `QMS_FOCUS` | Timer **re-armed**, no flicker, no re-layout. |
 | `dwellSec` elapsed | `QMS_FOCUS` | previous mode | The mode that was active before the call. |
-| Manual override (controller/MQTT) | any | requested | Held for 600 s, then back to auto. |
-| **Page-level** QMS failure — the page will not load, the renderer crashes, the QMS origin is unreachable | `SPLIT` | `MEDIA_ONLY` | There is no strip to show. |
-| **Selector-level** failure — the page loaded, the probe does not match | `SPLIT` | `SPLIT` | Layout unchanged; the strip renders the native `qmsUnavailable` card. Never a stale number. |
+| Manual override (controller/MQTT) | any | requested | `MEDIA_ONLY` holds 30 min, `QMS_ONLY` indefinitely, `SPLIT` drops any hold. |
+| Call detected during a manual hold | manual mode | `QMS_FOCUS` | Returns to the manual mode only if its hold has not expired; otherwise to `SPLIT`. |
+| **Page-level** QMS failure — the page will not load, the renderer crashes, the QMS origin is unreachable | `SPLIT` or `QMS_ONLY` | `MEDIA_ONLY` | There is no strip to show and nothing to activate. With media mode off the reducer is inert and the V1 error page stays full screen. |
+| **Selector-level** failure, selector has **never matched since launch** | `QMS_ONLY` | `QMS_ONLY` | Stays full screen; the page may be the daily activation form. |
+| **Selector-level** failure, selector matched before | `SPLIT` | `SPLIT` | Layout unchanged; the strip renders the native `qmsUnavailable` card. Never a stale number. |
 | `QmsAvailable` | `MEDIA_ONLY` (degraded) | `SPLIT` | Restores the previous layout. |
 
-The two failure cases are deliberately different. A page-level failure leaves
-nothing to restyle, so the media band takes the screen. A selector-level failure
-leaves a working page whose structure changed, so the strip stays where it is and
-says so; blanking the whole board because one selector moved would hide the
-media as well and make the fault look worse than it is.
+The failure cases are deliberately different. A page-level failure leaves
+nothing to restyle, so the media band takes the screen — including at launch,
+where `QMS_ONLY` goes straight to `MEDIA_ONLY` because a page that never loaded
+has nothing to activate. A selector-level failure leaves a working page whose
+structure changed, so the strip stays where it is and says so; blanking the
+whole board because one selector moved would hide the media as well and make
+the fault look worse than it is. Before the selector has ever matched there is
+nothing to degrade from, so the app does not degrade at all — see
+[Boot and activation](#boot-and-activation).
 
-`QMS_ONLY` and `MEDIA_ONLY` are also selectable manually, and a manual selection
-survives the 600 s hold only if the user re-selects it; otherwise the reducer
-returns to automatic behaviour.
+`QMS_ONLY` and `MEDIA_ONLY` are also selectable manually. The hold follows the
+same principle as the boot rule: **a manual mode that hides the queue gets a
+timeout; one that shows it does not.**
+
+| Manual mode | Hold | Why |
+| --- | --- | --- |
+| `MEDIA_ONLY` | **30 minutes**, then back to `SPLIT` | long enough to configure and preview |
+| `QMS_ONLY` | **indefinite** | it is the safe state — the queue is visible |
+| `SPLIT` | not applicable | the automatic default |
+
+A call arriving during a manual hold still takes `QMS_FOCUS` and returns to the
+manual mode only if its hold has not expired — otherwise it returns to `SPLIT`.
+
+### Boot and activation
+
+The QMS requires a code and a button press once a day before it shows the
+dashboard. That form is served at the QMS URL, and a 238 px strip makes it
+unusable, so **media mode does not engage until the dashboard is actually
+rendering.** The rule in one sentence: the strip selector must have matched at
+least once since launch before any layout other than full-screen `QMS_ONLY` is
+allowed.
+
+| Situation | Result |
+| --- | --- |
+| Launch, before anything is checked | **`QMS_ONLY`** full screen, regardless of `mediaModeEnabled` |
+| Page loaded, strip selector has **never matched since launch** | **stay `QMS_ONLY`** — the operator may be looking at an activation form |
+| Page loaded, selector matched before, now does not | **stay `SPLIT`** with the native `qmsUnavailable` card |
+| Page cannot load at all (origin or network failure) | **`MEDIA_ONLY`** — there is nothing to activate; the strip area shows the unavailability notice and the existing retry keeps running |
+
+The reason is plain: **the morning activation must get the whole screen, and the
+app must not learn to hide the one screen the operator needs.** Degrading to
+`SPLIT` on a page whose selector has never matched would put a dashboard that is
+not there into the bottom fifth of the screen, with the code form crushed into
+it. Staying full screen costs a media loop that has not started yet, which is
+nothing.
+
+The table governs **when media mode may engage**, so it assumes
+`mediaModeEnabled` is true. With it off the reducer is inert and every row
+collapses to V1: `QMS_ONLY`, with the WebView's own error page when the page
+cannot load.
+
+**A renderer crash or a Refresh WebView returns to `QMS_ONLY`**, because the
+reload lands on the activation page, and the probe history resets with it. The
+history is a per-launch fact by construction: it is not stored, so a restart
+cannot inherit a match from before the reboot.
 
 ## SPLIT layout
 
@@ -351,14 +409,17 @@ Bands at 1080p:
 
 | Band | Share | Height at 1080p |
 | --- | --- | --- |
-| Media | 71 % | 767 px |
+| Media | 71 % | 766 px |
 | Header | 7 % | 76 px |
-| Queue | 22 % | 237 px |
+| Queue | 22 % | 238 px |
 
 The bands are percentages of the screen; the pixel column is the 1080p surface
-those percentages were authored against. Every typography and card dimension in
-this document is likewise authored at 1080p and multiplied by
-`renderScale = screenHeightDp / 1080` at runtime — see
+those percentages were authored against. The header and queue bands are computed
+first, on purpose: each is derived from its own percentage and the media band
+takes the remainder. That is why 71/7/22 is **766/76/238** and not 767/76/237 —
+7 % of 1080 rounds to 76, 22 % rounds to 238, and 1080 − 76 − 238 = 766. Every
+typography and card dimension in this document is likewise authored at 1080p and
+multiplied by `renderScale = screenHeightDp / 1080` at runtime — see
 [Resolution independence](#resolution-independence). There is no second design
 for a 4K panel.
 
@@ -390,7 +451,7 @@ reference TV and is not a second supported design.
   cutting the overflow, so it is the only mode where content can be lost, and
   choosing it accepts that.
 - The **≈71 % area figure applies to the letterbox modes only** (16:9 content in
-  a 1920×767 band fills 1364/1920), so roughly a quarter of the band is fill.
+  a 1920×766 band fills 1362/1920), so roughly a quarter of the band is fill.
   That is the price of never cropping, and it is stated here rather than
   discovered later. `cover` uses the full band by cropping.
 
@@ -535,6 +596,37 @@ understands.
 If a second call arrives during focus, the dwell timer is re-armed and the
 layout is not touched again.
 
+## MEDIA_ONLY
+
+Three states, and the difference between them is what the operator is working
+on:
+
+```
+QMS_FOCUS   full-screen QMS    - you work in the dashboard (activate, log in)
+MEDIA_ONLY  full-screen media  - you work on media (pick a source, test it)
+SPLIT       on air             - both, hands off
+```
+
+`MEDIA_ONLY` is a **media workspace**, not a display mode to sit in. It exists so
+that setting media up happens on the TV, with the whole screen, instead of
+through a phone while the panel shows a strip.
+
+- Entering `MEDIA_ONLY` shows full-screen media **and opens the media panel**;
+  closing the panel leaves pure playback. The picture is the thing being judged,
+  so the controls do not cover it once the choice is made.
+- **The panel is the existing on-device menu**, not a second overlay: the media
+  rows are added to `menu_overlay` and opened by the same MENU/INFO key (or
+  long-press Back). Reuse is deliberate — focus handling, D-pad traversal and the
+  Back ladder already exist there, and a second overlay would be a second set of
+  those to keep correct.
+- Menu rows, shown only when media mode is enabled: **Play / Pause**, **Next
+  file**, **Play from URL…** (reusing the existing Enter URL dialog pattern),
+  **Choose media…** (a D-pad list of local files), and **Media mode** (QMS only /
+  Media only / Split).
+- **Back in `MEDIA_ONLY`** closes the panel if it is open, otherwise returns to
+  `SPLIT`. Without this rung, Back would fall through to the WebView ladder and
+  navigate the QMS page away from the dashboard.
+
 ## Detection
 
 ### The rule
@@ -610,19 +702,24 @@ reappear unchanged, no signal is emitted.
 ### Selector health
 
 Every page load probes `querySelectorAll` for the list container, the current
-card and the three field selectors, and publishes `qmsDetectionHealthy`. The two
+card and the three field selectors, and publishes `qmsDetectionHealthy`. The
 failure modes are handled differently on purpose:
 
 - **Selector-level failure** — the page loaded, but the structure changed and
-  the probe does not match. The app **stays in `SPLIT`** and the strip renders a
-  native `qmsUnavailable` card in place of the cards. No numbers are displayed,
-  not even the last known ones. The probe retries on the 15 s interval and
-  restores the strip when it passes. Blanking the whole board for a moved
-  selector would also hide the media, and would make a recoverable fault look
-  identical to a dead page.
+  the probe does not match. If the selector has matched before, the app **stays
+  in `SPLIT`** and the strip renders a native `qmsUnavailable` card in place of
+  the cards. No numbers are displayed, not even the last known ones. The probe
+  retries on the 15 s interval and restores the strip when it passes. Blanking
+  the whole board for a moved selector would also hide the media, and would make
+  a recoverable fault look identical to a dead page. If the selector has **never
+  matched since launch**, there is nothing to degrade from and no evidence that a
+  strip ever existed: the app **stays in `QMS_ONLY`** full screen, because the
+  page may be the daily activation form — see
+  [Boot and activation](#boot-and-activation).
 - **Page-level failure** — the page will not load, the renderer crashes, or the
   QMS origin is unreachable. There is nothing to restyle, so `SPLIT` transitions
-  to `MEDIA_ONLY` and the media band takes the screen.
+  to `MEDIA_ONLY` and the media band takes the screen; at launch the same case
+  goes straight from `QMS_ONLY` to `MEDIA_ONLY`.
 
 A stale number on a queue board is worse than no number: it sends a patient to a
 counter that is not calling them.
@@ -659,8 +756,10 @@ A JSON list of `{type, url, durationSec}` with `type` in `image`/`video` and
 otherwise it is **the local folder**. The two are **not merged and not
 interleaved** — ordering across sources is a scheduling question this version
 does not answer, and a mixed queue would make "why did that clip play"
-unanswerable. If `playlistEnabled` and `mediaLocalEnabled` are both false, media
-mode has no source and the media band shows the `mediaUnavailable` notice.
+unanswerable. The one exception is the [ad-hoc URL](#ad-hoc-url), which replaces
+the queue entirely until another source is chosen. If `playlistEnabled` and
+`mediaLocalEnabled` are both false, media mode has no source and the media band
+shows the `mediaUnavailable` notice.
 
 **Blast radius.** A malicious or broken playlist can only queue `http`/`https`
 URLs for playback. It cannot navigate the browser, read state, or reach the
@@ -669,6 +768,29 @@ instructions to the WebView.
 
 `playlistEnabled` defaults to **false**: an install with no server configured
 must not spend its life retrying one.
+
+### Ad-hoc URL
+
+A third source, for "play this one URL now" without staging a file on the TV.
+`POST /api/media/open` with `{"url": "..."}` **overrides the queue until another
+source is chosen**. It is a selection, not a setting: it changes neither
+`playlistEnabled` nor `mediaLocalEnabled`, and choosing another source replaces
+it.
+
+- The route mirrors `/api/nav/open` **exactly**: the same `UrlValidator`,
+  `http`/`https` only, and anything else rejected with `invalid_url`.
+- `mediaSource` gains `"url"` alongside `"local"` and `"playlist"`, so the
+  controller can show which source is playing.
+- **Single items loop like any other item.** A one-item queue is the existing
+  `setLooping(true)` path, so the URL plays again rather than parking on the last
+  frame.
+- It is a media source, not a navigation: the URL is fetched by the media host
+  and cannot move the WebView. Navigating is what `/api/nav/open` is for.
+
+**Blast radius.** An ad-hoc URL is the same class of input as a playlist entry —
+an `http`/`https` envelope fetched by the player — and passes the same
+`UrlValidator` before it reaches the queue. It cannot navigate the browser, read
+state, or reach the injected sink.
 
 ### Audio policy
 
@@ -829,7 +951,7 @@ sense that they can be tuned, but their unit is "1080p pixels", not screen pixel
 | Key | Type | Default | Validation / notes |
 | --- | --- | --- | --- |
 | `mediaModeEnabled` | bool | `false` | Master switch; off means V1 behaviour. |
-| `qmsUrl` | string | existing Home URL | `UrlValidator`; `http`/`https` only. |
+| `qmsUrl` | string | existing Home URL | `UrlValidator`; `http`/`https` only. A **blank** stored value resolves to the Home URL **at read time** and is never persisted as the substituted value, so it keeps tracking the Home URL. |
 | `qmsStripSelector` | string | `main > div:nth-child(1)` | Non-blank, length-bounded. |
 | `qmsNumberSelector` | string | `div:first-child > span` | Non-blank, length-bounded. |
 | `qmsLocationSelector` | string | `div:nth-child(2) > span:first-child` | Non-blank, length-bounded. |
@@ -846,7 +968,7 @@ sense that they can be tuned, but their unit is "1080p pixels", not screen pixel
 | `historyCardMinPx` | int | `190` | 120–320, must not exceed the max. 1080p pixels. |
 | `historyCardMaxPx` | int | `320` | 190–480. 1080p pixels. |
 | `uiLanguage` | enum | `ms` | `ms` \| `en` \| `zh` \| `ta`. |
-| `mediaLocalEnabled` | bool | `true` | Local folder as a source. |
+| `mediaLocalEnabled` | bool | `true` | Local folder as a source. An ad-hoc URL overrides the queue without changing this switch — see [Ad-hoc URL](#ad-hoc-url). |
 | `playlistEnabled` | bool | `false` | Off until a URL is configured. |
 | `playlistUrl` | string | empty | `http`/`https` only. |
 | `playlistRefreshSec` | int | `300` | 30–3600. |
@@ -863,7 +985,9 @@ I change it" has an answer:
 - 500 ms signal clamp — a timing invariant; a configurable clamp is a bug
   generator.
 - 15 s selector probe interval — detection health, not presentation.
-- 600 s manual-mode hold — an override that outlives a shift is a support call.
+- 30-minute `MEDIA_ONLY` hold — long enough to configure and preview; a mode
+  that hides the queue must not outlive the job it was chosen for. `QMS_ONLY`
+  holds indefinitely instead, because the queue stays visible.
 - the upload caps (256 MiB / 200 files / 2 GiB / 256 MiB reserve / 3 concurrent /
   6 per minute);
 - playlist 256 KiB / 200 items;
@@ -882,11 +1006,18 @@ strict JSON.
 | --- | --- | --- |
 | `GET` | `/api/settings/media` | Read the media settings block. |
 | `POST` | `/api/settings/media` | Replace it as a whole; `400` names the bad field. |
-| `POST` | `/api/media/mode` | Manual mode (`qms_only`, `media_only`, `split`); 600 s hold. |
+| `POST` | `/api/media/mode` | Manual mode (`qms_only`, `media_only`, `split`); `media_only` holds 30 min, `qms_only` indefinitely, `split` drops any hold. |
+| `POST` | `/api/media/open` | Play an ad-hoc URL now; `{"url": "..."}`, the same `UrlValidator` and `invalid_url` as `/api/nav/open`; overrides the queue until another source is chosen. |
 | `GET` | `/api/media/files` | Library: id, display name, size, type. |
 | `POST` | `/api/media/upload` | Binary stream; `X-Terebi-Filename`; see [Media upload](#media-upload). |
 | `POST` | `/api/media/delete` | Delete by opaque id. |
 | `GET` | `/api/media/file` | Serve by opaque id (preview); no `Range`. |
+
+`GET /api/settings/media` returns every writable key plus a **read-only
+`runtime` object** holding `mode` and `renderScale`. `POST` accepts **only the
+writable keys**: `runtime` is derived state, so a verbatim echo of the GET body —
+including `runtime` — is rejected by the strict JSON reader rather than silently
+ignored. Send the fields you mean to change, and nothing else.
 
 State is **not** a new protocol. `BrowserState`
 (`app/src/main/java/com/terebibro/tv/web/BrowserState.kt`), `StateJson`, the
@@ -898,6 +1029,9 @@ following fields through the existing single fan-out:
 `qmsDetectionHealthy`, `qmsLastCallAtMs`, `documentStartSupported`,
 `mediaLocalFiles`, `mediaLocalBytes`, `mediaFreeBytes`, `uiLanguage`,
 `screenWidthDp`, `screenHeightDp`, `densityDpi`, `renderScale`.
+
+`mediaSource` is `"local"`, `"playlist"` or `"url"`, so a controller can say
+which of the three sources is playing without inferring it from the item.
 
 `renderScale` is a derived ratio (`screenHeightDp / 1080`), published so a
 controller can check the factor without recomputing it. All of these fields are
@@ -946,7 +1080,7 @@ Ranked. Each has either a mitigation or the experiment that settles it.
 | 1 | React re-render wipes the strip layout. | Stylesheet scoped on `html[data-terebi-strip]` (React does not own `<html>`), re-asserted by the observer; probe plus native-card fallback. |
 | 2 | 1080p H.264 decode alongside a live WebView on an Android 9 box. | Cap the envelope at 1080p30 H.264/AAC-LC, `SurfaceView`, no preload, release on destroy; 30-minute soak with `dumpsys gfxinfo` and `dumpsys media.player`. |
 | 3 | Chromium 66 has no document-start script. | Feature-detect, dual-injection fallback, `documentStartSupported` in diagnostics, `callSource` default `dom`. |
-| 4 | Selector rot on a third-party page. | Probe on every load, `qmsDetectionHealthy`, selector-level native card (stays in `SPLIT`), page-level fallback to `MEDIA_ONLY`; never a stale number. |
+| 4 | Selector rot on a third-party page. | Probe on every load, `qmsDetectionHealthy`, selector-level native card (`SPLIT` after one match, `QMS_ONLY` full screen before the first), page-level fallback to `MEDIA_ONLY`; never a stale number, and never a wrong guess at the activation form. |
 | 5 | Storage exhaustion breaking token writes. | Quota, reserve, media outside `filesDir`, `.part` sweep at boot. |
 | 6 | CJK/Tamil glyph coverage. | Device check; subset font or English fallback, decided after the check. |
 | 7 | Trust boundary on the JS bridge. | Content-free sink, origin gate, 500 ms clamp; residual nuisance flip accepted and documented. |
@@ -963,8 +1097,12 @@ Pure-logic JVM units in the repo's house style — JUnit 4, backtick test names,
 mocks; the decision is extracted into an object and tested exhaustively:
 
 - `MediaStateMachineTest` — every transition in [Modes](#modes), including
-  re-arm, manual expiry, the page-level failure path (`SPLIT`→`MEDIA_ONLY`) and
-  the selector-level failure path (stays in `SPLIT`, no transition).
+  re-arm, the 30-minute `MEDIA_ONLY` hold and the indefinite `QMS_ONLY` hold, the
+  [boot rule](#boot-and-activation) (never matched keeps `QMS_ONLY`; a lost match
+  after one match stays `SPLIT`), a call during a manual hold returning to that
+  hold or to `SPLIT`, the page-level failure path (`SPLIT`→`MEDIA_ONLY`, and
+  `QMS_ONLY`→`MEDIA_ONLY` at launch) and the selector-level failure path (stays in
+  `SPLIT`, no transition).
 - `MediaSettingsValidatorTest` — every range, every enum, the band-sum rule,
   and "one bad field writes nothing".
 - `MediaLayoutTest` — 1080p, 720p at both 540 dp and 720 dp, 3840×2160 dp and a
@@ -974,7 +1112,8 @@ mocks; the decision is extracted into an object and tested exhaustively:
   separators, control characters, leading dot, reserved names).
 - `MediaPlaylistTest` — strict parsing, item cap, size cap, scheme refusal,
   last-good fallback ordering.
-- `MediaQueueTest` — next/advance/loop, single item, empty source.
+- `MediaQueueTest` — next/advance/loop, single item, empty source, and an
+  ad-hoc URL as a one-item queue that loops.
 - `QmsCallKeyTest` — the `number | location | time` key, whitespace
   normalisation, the re-call case (`A1001 → Kaunter 1 → A1001 → Kaunter 3` fires
   twice), and re-render-vs-call.
@@ -1005,9 +1144,11 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
 7. Chime audible during focus (media paused, not muted).
 8. Chime-only detection on the fallback injection path.
 9. A broken selector degrades within 15 s and recovers when fixed; a page that
-   will not load falls back to `MEDIA_ONLY`.
+   will not load falls back to `MEDIA_ONLY`. A cold launch stays `QMS_ONLY` full
+   screen through the daily activation form and reaches `SPLIT` only after it.
 10. Network loss keeps local media playing.
-11. Renderer crash recovers and re-injects the script.
+11. Renderer crash recovers and re-injects the script, returning to `QMS_ONLY`
+    full screen until the dashboard renders again.
 12. Overlays pause media and restore focus on close.
 13. Back ladder in all four modes.
 14. D-pad does not activate invisible QMS controls in media modes.
@@ -1016,7 +1157,9 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
     a reboot.
 16. 24 h soak: flat memory, stable decoder count.
 17. CJK and Tamil labels render without tofu, at 4K as well as 1080p.
-18. Mode restored after a kill/relaunch.
+18. After a kill/relaunch the app is back at `QMS_ONLY` full screen — never
+    straight into a split — and reaches `SPLIT` again once the dashboard
+    renders.
 19. On a native-dp 4K unit, geometry is the 1080p design at 2× with no seam or
     gap; on a density-scaled 4K unit it is the 1080p design at 1× and still
     sharp. Text is larger, not more numerous.
