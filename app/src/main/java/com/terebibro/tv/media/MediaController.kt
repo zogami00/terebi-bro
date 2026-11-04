@@ -15,7 +15,12 @@ data class MediaRuntime(
     val error: String,
     val localFiles: Int,
     val localBytes: Long,
-    val freeBytes: Long
+    val freeBytes: Long,
+    val qmsNow: String = "",
+    val qmsLocation: String = "",
+    val qmsDetectionHealthy: Boolean = false,
+    val qmsLastCallAtMs: Long = 0L,
+    val documentStartSupported: Boolean = false
 )
 
 /**
@@ -36,7 +41,14 @@ class MediaController(
     private val store: MediaStore,
     private val settings: () -> MediaSettings,
     private val io: Executor,
-    private val onChanged: () -> Unit
+    private val onChanged: () -> Unit,
+    /** Runs a controller-built snippet against the page's current document. */
+    private val evaluate: (String) -> Unit = {},
+    /** The same factor the native bands use; kept as a provider so it tracks the surface. */
+    private val renderScale: () -> Float = { 1f },
+    private val documentStartSupported: () -> Boolean = { false },
+    /** `scheme://host[:port]` of the configured QMS page, or empty. */
+    private val qmsOrigin: () -> String = { "" }
 ) {
 
     private val main = Handler(Looper.getMainLooper())
@@ -82,6 +94,15 @@ class MediaController(
     private var localBytes = 0L
     private var freeBytes = 0L
 
+    // Detection memory. `hasMatchedSinceLaunch` and `detectionHealthy` are
+    // reducer fields (qmsMatched / qmsDetectionHealthy); these are the values
+    // the page reported and the key comparison needs.
+    private val signalGuard = QmsSignalGuard()
+    private var lastKey: QmsCallKey? = null
+    private var qmsNow = ""
+    private var qmsLocation = ""
+    private var qmsLastCallAtMs = 0L
+
     private val paused: Boolean
         get() = state.enabled && MediaPausePolicy.shouldPause(
             mode = state.mode,
@@ -107,12 +128,119 @@ class MediaController(
         if (state.enabled && !paused && currentItem?.kind == MediaItem.Kind.IMAGE) next()
     }
 
+    private val dwellExpiry = Runnable {
+        val previous = state.mode
+        val wasPaused = paused
+        dispatch(MediaEvent.DwellElapsed)
+        applyPause(wasPaused)
+        if (state.mode != previous) onChanged()
+    }
+
     fun attach(host: MediaPlayerHost) {
         this.host = host
         syncSettings()
     }
 
     fun settingsChanged() = syncSettings()
+
+    // ---------------------------------------------------------------------
+    // QMS detection
+    // ---------------------------------------------------------------------
+
+    /**
+     * The bridge's only entry point (already hopped to the main thread by
+     * `QmsBridge`). Unknown kinds and clamped repeats are dropped here; M2
+     * consumes `now`, `probe` and `ready` and ignores `audio`/`visibility`.
+     */
+    fun onQmsSignal(kindWire: String, value: String?) {
+        val kind = QmsSignalKind.fromWire(kindWire) ?: return
+        val clean = signalGuard.accept(kind, value) ?: return
+        when (kind) {
+            QmsSignalKind.NOW -> onQmsNow(clean)
+            // Three probe states: `ok` (a card resolved), `empty` (the list
+            // container resolved but has no cards yet) and `missing` (the
+            // selectors did not resolve at all). An empty list is healthy: the
+            // board is simply awaiting the first call of the day.
+            QmsSignalKind.PROBE -> onQmsProbe(clean == "ok" || clean == "empty")
+            QmsSignalKind.READY -> Unit
+            // The chime and the Page Visibility hook are M4; accepting them
+            // now would only publish state nothing acts on.
+            QmsSignalKind.AUDIO, QmsSignalKind.VISIBILITY -> Unit
+        }
+    }
+
+    /** Every page load re-applies the strip while it is on screen. */
+    fun onPageLoaded() {
+        val previous = state.mode
+        dispatch(MediaEvent.QmsPageLoaded)
+        if (state.mode == MediaMode.SPLIT) applyStrip()
+        if (state.mode != previous) onChanged()
+    }
+
+    /** The page will not load: there is nothing to restyle. */
+    fun onQmsPageFailed() {
+        val previous = state.mode
+        dispatch(MediaEvent.QmsPageFailed)
+        if (state.mode != previous) onChanged()
+    }
+
+    /** A rebuilt WebView lands on the activation page; detection starts over. */
+    fun onWebViewRestarted() {
+        resetDetection()
+        dispatch(MediaEvent.QmsReset)
+        onChanged()
+    }
+
+    /** Re-applies the stylesheet after a surface or settings change. */
+    fun reapplyStrip() {
+        if (state.enabled && state.mode == MediaMode.SPLIT) applyStrip()
+    }
+
+    private fun onQmsNow(payload: String) {
+        val parts = payload.split(QmsSignalGuard.FIELD_SEPARATOR)
+        val number = parts.getOrNull(0).orEmpty()
+        val location = parts.getOrNull(1).orEmpty()
+        val time = parts.getOrNull(2).orEmpty()
+        if (number.isBlank()) return
+
+        val displayChanged = number != qmsNow || location != qmsLocation
+        // The published values are the page's own strings, verbatim.
+        qmsNow = number
+        qmsLocation = location
+
+        val key = QmsCallKey.from(number, location, time)
+        // The first observation only seeds `lastKey`: a cold start with a stale
+        // head card must not take the screen (see QmsCallKey.isNewCall).
+        val newCall = QmsCallKey.isNewCall(lastKey, key)
+        lastKey = key
+
+        // Reading a complete card is itself proof that the selectors resolve.
+        if (!state.qmsDetectionHealthy || !state.qmsMatched) {
+            val before = state.mode
+            dispatch(MediaEvent.QmsProbe(true))
+            if (state.mode == before && state.mode == MediaMode.SPLIT) applyStrip()
+        }
+
+        if (newCall) {
+            qmsLastCallAtMs = System.currentTimeMillis()
+            dispatch(MediaEvent.Call(true))
+        }
+        if (newCall || displayChanged) onChanged()
+    }
+
+    private fun onQmsProbe(matched: Boolean) {
+        val previousMode = state.mode
+        dispatch(MediaEvent.QmsProbe(matched))
+        if (state.mode == previousMode && state.mode == MediaMode.SPLIT) applyStrip()
+        onChanged()
+    }
+
+    private fun resetDetection() {
+        lastKey = null
+        qmsNow = ""
+        qmsLocation = ""
+        qmsLastCallAtMs = 0L
+    }
 
     fun setMode(mode: MediaMode): MediaMode {
         // `QMS_FOCUS` is the reducer's transient mode, and a manual mode means
@@ -263,7 +391,12 @@ class MediaController(
         error = state.lastError,
         localFiles = localFiles,
         localBytes = localBytes,
-        freeBytes = freeBytes
+        freeBytes = freeBytes,
+        qmsNow = qmsNow,
+        qmsLocation = qmsLocation,
+        qmsDetectionHealthy = state.qmsDetectionHealthy,
+        qmsLastCallAtMs = qmsLastCallAtMs,
+        documentStartSupported = documentStartSupported()
     )
 
     fun currentMode(): MediaMode = state.mode
@@ -299,6 +432,9 @@ class MediaController(
             // library (and the free-space figures) are expected to be current.
             reloadQueue(reset = !wasEnabled)
         }
+        // Strip dimensions, labels and the language all live in settings, so a
+        // settings change is also a stylesheet change.
+        if (state.enabled && state.mode == MediaMode.SPLIT) applyStrip()
         onChanged()
     }
 
@@ -436,7 +572,64 @@ class MediaController(
         if (event !is MediaEvent.Enabled && state.mode != previousMode) {
             applyPause(wasPaused)
         }
+        if (state.mode != previousMode) {
+            applyModeEffects()
+        }
         scheduleTimers()
+    }
+
+    /**
+     * The strip exists only while `SPLIT` is on screen. Entering it asserts the
+     * attribute and the stylesheet; leaving it removes the attribute, which is
+     * all the restore needs.
+     */
+    private fun applyModeEffects() {
+        when (state.mode) {
+            MediaMode.SPLIT -> applyStrip()
+            MediaMode.QMS_FOCUS, MediaMode.MEDIA_ONLY, MediaMode.QMS_ONLY -> removeStrip()
+        }
+    }
+
+    private fun applyStrip() {
+        val origin = qmsOrigin()
+        if (origin.isEmpty()) return
+        val css = QmsStripCss.build(cfg, renderScale())
+        val stripAttribute = QmsScript.jsString(QmsStripCss.attribute())
+        val stateAttribute = QmsScript.jsString(QmsStripCss.stateAttribute())
+        val unhealthy = QmsScript.jsString("unavailable")
+        val script = buildString {
+            append("(function(){try{")
+            // The same origin gate as the injected script: the evaluate call
+            // must never restyle an unrelated page the operator navigated to.
+            append("if(location.origin!==")
+                .append(QmsScript.jsString(origin))
+                .append("){return;}")
+            append("var d=document.documentElement;")
+            append("d.setAttribute(").append(stripAttribute).append(",'');")
+            if (state.qmsDetectionHealthy) {
+                append("d.removeAttribute(").append(stateAttribute).append(");")
+            } else {
+                append("d.setAttribute(").append(stateAttribute).append(',').append(unhealthy).append(");")
+            }
+            append("var id='terebi-qms-strip';")
+            append("var s=document.getElementById(id);")
+            append("if(!s){s=document.createElement('style');s.id=id;")
+            append("(document.head||document.documentElement).appendChild(s);}")
+            append("s.textContent=").append(QmsScript.jsString(css)).append(";")
+            append("}catch(e){}})();")
+        }
+        evaluate(script)
+    }
+
+    private fun removeStrip() {
+        val stripAttribute = QmsScript.jsString(QmsStripCss.attribute())
+        val stateAttribute = QmsScript.jsString(QmsStripCss.stateAttribute())
+        evaluate(
+            "(function(){try{var d=document.documentElement;" +
+                "d.removeAttribute($stripAttribute);" +
+                "d.removeAttribute($stateAttribute);" +
+                "}catch(e){}})();"
+        )
     }
 
     private fun applyPause(wasPaused: Boolean) {
@@ -457,6 +650,16 @@ class MediaController(
         val until = state.manualUntilMs
         if (state.enabled && until > 0L && until != MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS) {
             main.postDelayed(manualExpiry, (until - System.currentTimeMillis()).coerceAtLeast(0L))
+        }
+        // The dwell is re-armable: every new call in `QMS_FOCUS` replaces the
+        // deadline, and the callback only acts while the mode is still focus.
+        main.removeCallbacks(dwellExpiry)
+        val dwellUntil = state.dwellUntilMs
+        if (state.enabled && dwellUntil > 0L) {
+            main.postDelayed(
+                dwellExpiry,
+                (dwellUntil - System.currentTimeMillis()).coerceAtLeast(0L)
+            )
         }
         scheduleImageTimer()
     }

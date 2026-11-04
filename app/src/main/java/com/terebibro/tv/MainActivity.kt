@@ -39,6 +39,7 @@ import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaStore
+import com.terebibro.tv.media.QmsScript
 import com.terebibro.tv.mqtt.MqttAction
 import com.terebibro.tv.mqtt.MqttCommand
 import com.terebibro.tv.mqtt.MqttManager
@@ -163,6 +164,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
      */
     private var dialogVisible = false
 
+    /** The inputs the injected script was last built from; avoids needless rebuilds. */
+    private var appliedQmsSignature: String? = null
+
     // ---------------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------------
@@ -183,12 +187,26 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
         webViewController = WebViewController(this, this, { config.homeUrl })
         webViewController.attach(webViewContainer, config.homeUrl)
+        // The sink is stored here; the bridge itself is registered only while
+        // the injected script is installed, so media mode off exposes nothing.
+        webViewController.setQmsSignalSink { kind, value ->
+            if (::mediaController.isInitialized) mediaController.onQmsSignal(kind, value)
+        }
 
         mediaStore = MediaStore(this)
-        mediaController = MediaController(mediaStore, { config.mediaSettings }, io) {
-            applyMediaLayoutOnMain()
-            if (::wsHub.isInitialized) broadcastState()
-        }
+        mediaController = MediaController(
+            mediaStore,
+            { config.mediaSettings },
+            io,
+            {
+                applyMediaLayoutOnMain()
+                if (::wsHub.isInitialized) broadcastState()
+            },
+            evaluate = { script -> webViewController.evaluateQms(script) },
+            renderScale = { screenRenderScale() },
+            documentStartSupported = { webViewController.documentStartSupported() },
+            qmsOrigin = { qmsOriginOf(config.mediaSettings) }
+        )
         val host = MediaPlayerHost(
             this,
             mediaSurface,
@@ -203,6 +221,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             }
         )
         mediaController.attach(host)
+        // Install the observer before the first load when media mode is already
+        // on; the origin gate means a non-QMS home page is untouched.
+        applyQmsScriptOnMain(force = true)
 
         auth = AuthManager(
             config = config,
@@ -302,6 +323,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // This activity consumes screen-size/density changes, so it is never
         // recreated and the band heights have to be recomputed here.
         applyMediaLayoutOnMain()
+        // renderScale is derived from the same surface; the strip stylesheet
+        // carries scaled dimensions, so it is rebuilt with it.
+        if (::mediaController.isInitialized) mediaController.reapplyStrip()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -1221,17 +1245,27 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     override fun onWebPageFinished(url: String?) {
         if (!pageHasError) hideErrorOverlay()
+        // Chromium 66 fires onPageFinished for its own error page too. Calling
+        // onPageLoaded() then would immediately undo the page failure the error
+        // page just recorded (and revert the documented MEDIA_ONLY), so a load
+        // is only a recovery when the page did not fail.
+        if (!pageHasError) mediaController.onPageLoaded()
         broadcastState()
     }
 
     override fun onWebPageError(description: String) {
         pageHasError = true
         SafeLog.w(TAG, "Page load failed")
+        // Page-level failure: there is nothing to restyle. With media mode off
+        // the reducer is inert and the V1 error page stays full screen.
+        mediaController.onQmsPageFailed()
         showErrorOverlay()
         wsHub.broadcastEvent("page_error", description)
     }
 
     override fun onWebViewRestarted() {
+        // Rebuilds land on the activation page; detection must start again.
+        mediaController.onWebViewRestarted()
         wsHub.broadcastEvent("webview_restarted", null)
     }
 
@@ -1281,11 +1315,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             mediaCount = runtime.count,
             mediaPaused = runtime.paused,
             mediaError = runtime.error,
-            qmsNow = "",
-            qmsLocation = "",
-            qmsDetectionHealthy = false,
-            qmsLastCallAtMs = 0L,
-            documentStartSupported = false,
+            qmsNow = runtime.qmsNow,
+            qmsLocation = runtime.qmsLocation,
+            qmsDetectionHealthy = runtime.qmsDetectionHealthy,
+            qmsLastCallAtMs = runtime.qmsLastCallAtMs,
+            documentStartSupported = runtime.documentStartSupported,
             mediaLocalFiles = runtime.localFiles,
             mediaLocalBytes = runtime.localBytes,
             mediaFreeBytes = runtime.freeBytes,
@@ -1481,9 +1515,54 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun applyMediaSettingsChangedOnMain() {
         mediaController.settingsChanged()
         updateMediaMenuVisibility()
+        // qmsUrl, a selector or the master switch changing rebuilds the
+        // injected script; the signature check makes a no-op edit cheap.
+        applyQmsScriptOnMain()
         applyMediaLayoutOnMain()
         seq.incrementAndGet()
         broadcastState()
+    }
+
+    /**
+     * Rebuilds the injected script only when something it depends on changed.
+     * The origin is resolved exactly as the settings are: a blank qmsUrl tracks
+     * the Home URL at read time.
+     */
+    private fun applyQmsScriptOnMain(force: Boolean = false) {
+        val media = config.mediaSettings
+        val origin = qmsOriginOf(media)
+        val signature = listOf(
+            media.enabled,
+            media.qmsUrl,
+            media.qmsStripSelector,
+            media.qmsNumberSelector,
+            media.qmsLocationSelector,
+            media.qmsTimeSelector,
+            origin
+        ).joinToString("\u001f")
+        if (!force && signature == appliedQmsSignature) return
+        appliedQmsSignature = signature
+
+        val script = if (media.enabled && origin.isNotEmpty()) {
+            QmsScript.build(media, origin)
+        } else {
+            ""
+        }
+        // An empty script also removes a previously installed handler.
+        webViewController.setQmsScript(script, if (script.isEmpty()) "" else origin)
+    }
+
+    private fun qmsOriginOf(media: MediaSettings): String {
+        val url = media.qmsUrl.ifBlank { config.homeUrl }
+        return QmsScript.originOf(url)
+    }
+
+    private fun screenRenderScale(): Float {
+        val metrics = resources.displayMetrics
+        val density = if (metrics.density > 0f) metrics.density else 1f
+        if (metrics.heightPixels <= 0) return 1f
+        val heightDp = (metrics.heightPixels / density).roundToInt()
+        return MediaLayout.renderScale(heightDp).coerceAtLeast(1f)
     }
 
     override fun screenMetrics(): ScreenMetrics =

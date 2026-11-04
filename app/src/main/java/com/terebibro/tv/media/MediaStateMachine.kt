@@ -27,13 +27,24 @@ object MediaStateMachine {
         val current = expireManual(state, nowMs)
         return when (event) {
             is MediaEvent.Enabled -> onEnabled(current, event.enabled)
+            // A restart resets the per-launch history even while media mode is
+            // off, so the next enable starts from the activation page again.
+            MediaEvent.QmsReset -> onQmsReset(current)
             else -> if (!current.enabled) current else onEnabledEvent(current, event, cfg, nowMs)
         }
     }
 
     private fun onEnabled(state: MediaState, enabled: Boolean): MediaState =
         if (enabled) {
-            if (state.enabled) state else state.copy(enabled = true, mode = MediaMode.SPLIT)
+            if (state.enabled) {
+                state
+            } else {
+                // Boot rule: media mode may engage only after the strip selector
+                // has matched once since launch. Before that the page may be the
+                // daily activation form, which needs the whole screen.
+                val mode = if (state.qmsMatched) MediaMode.SPLIT else MediaMode.QMS_ONLY
+                state.copy(enabled = true, mode = mode)
+            }
         } else {
             // Disabling releases the display to V1 unconditionally, whatever
             // mode or hold was in force. The transient fields are cleared too:
@@ -81,6 +92,10 @@ object MediaStateMachine {
         MediaEvent.QmsAvailable ->
             if (state.qmsAvailable) state
             else state.copy(mode = MediaMode.SPLIT, qmsAvailable = true)
+        is MediaEvent.QmsProbe -> onQmsProbe(state, event.matched)
+        MediaEvent.QmsPageFailed -> onQmsPageFailed(state)
+        MediaEvent.QmsPageLoaded -> onQmsPageLoaded(state)
+        MediaEvent.QmsReset -> state
         is MediaEvent.Overlay -> state.copy(overlayVisible = event.visible)
         is MediaEvent.Lifecycle -> state.copy(lifecyclePaused = event.paused)
         is MediaEvent.PlaybackError -> state.copy(lastError = event.message)
@@ -108,6 +123,83 @@ object MediaStateMachine {
             state.copy(mode = MediaMode.SPLIT, manualUntilMs = 0L)
     }
 
+    /**
+     * Selector-level health. A failed probe never changes the mode: before the
+     * first match the page may be the activation form (stay `QMS_ONLY`), and
+     * after one match the strip stays in `SPLIT` with the unavailable card.
+     * A passing probe is the activation signal: it is the first evidence that
+     * the dashboard, not the form, is rendering. An empty call list counts as
+     * passing — the container resolved and the board is simply awaiting a call —
+     * so it neither blocks the boot rule nor hides the page.
+     */
+    private fun onQmsProbe(state: MediaState, matched: Boolean): MediaState {
+        val wasUnavailable = !state.qmsAvailable
+        val base = state.copy(
+            qmsMatched = state.qmsMatched || matched,
+            qmsDetectionHealthy = matched,
+            qmsAvailable = if (matched) true else state.qmsAvailable
+        )
+        if (!matched) return base
+        return when {
+            base.mode == MediaMode.QMS_ONLY && base.manualUntilMs == 0L ->
+                base.copy(mode = MediaMode.SPLIT)
+            wasUnavailable && base.mode == MediaMode.MEDIA_ONLY && base.manualUntilMs == 0L ->
+                base.copy(mode = MediaMode.SPLIT)
+            else -> base
+        }
+    }
+
+    /**
+     * Page-level failure: the page will not load, so there is no strip to show.
+     * A page that never loaded goes to `MEDIA_ONLY` at launch too, because
+     * there is nothing to activate.
+     */
+    private fun onQmsPageFailed(state: MediaState): MediaState = state.copy(
+        mode = MediaMode.MEDIA_ONLY,
+        qmsAvailable = false,
+        qmsDetectionHealthy = false,
+        dwellUntilMs = 0L
+    )
+
+    /**
+     * A page that loads proves the page-level failure is over. If no selector
+     * has ever matched, the display returns to full-screen `QMS_ONLY` — the
+     * page may be the activation form, which must not be crushed into a band.
+     *
+     * A live manual hold is restored rather than ignored: a page failure
+     * overrode the hold with `MEDIA_ONLY`, so without this the display would
+     * stay degraded after the page recovers. A live call is never cut short.
+     */
+    private fun onQmsPageLoaded(state: MediaState): MediaState {
+        val base = state.copy(qmsAvailable = true)
+        if (base.manualUntilMs != 0L) {
+            if (base.mode == MediaMode.QMS_FOCUS) return base
+            val held = if (base.manualUntilMs == MANUAL_INDEFINITE_UNTIL_MS) {
+                MediaMode.QMS_ONLY
+            } else {
+                MediaMode.MEDIA_ONLY
+            }
+            return base.copy(mode = held, dwellUntilMs = 0L)
+        }
+        return when {
+            base.mode == MediaMode.MEDIA_ONLY && base.qmsMatched ->
+                base.copy(mode = MediaMode.SPLIT)
+            base.mode == MediaMode.MEDIA_ONLY ->
+                base.copy(mode = MediaMode.QMS_ONLY)
+            else -> base
+        }
+    }
+
+    /** A rebuilt WebView lands on the activation page; the match history resets. */
+    private fun onQmsReset(state: MediaState): MediaState = state.copy(        mode = MediaMode.QMS_ONLY,
+        manualUntilMs = 0L,
+        returnMode = MediaMode.QMS_ONLY,
+        dwellUntilMs = 0L,
+        qmsMatched = false,
+        qmsDetectionHealthy = false,
+        qmsAvailable = true
+    )
+
     private fun onCall(state: MediaState, cfg: MediaSettings, nowMs: Long): MediaState {
         val dwellUntilMs = nowMs + cfg.dwellSec * 1000L
         return when (state.mode) {
@@ -118,7 +210,20 @@ object MediaStateMachine {
             // A second call only re-arms the dwell: no mode change and no
             // re-layout, so the board does not flicker mid-announcement.
             MediaMode.QMS_FOCUS -> state.copy(dwellUntilMs = dwellUntilMs)
-            MediaMode.QMS_ONLY -> state
+            // A call during a manual `QMS_ONLY` hold is still a real call: the
+            // screen goes to the queue for the dwell and returns to the hold.
+            // With no hold this is the boot path (the activation form has not
+            // matched yet), and there is nothing to show yet.
+            MediaMode.QMS_ONLY ->
+                if (state.manualUntilMs != 0L) {
+                    state.copy(
+                        mode = MediaMode.QMS_FOCUS,
+                        returnMode = MediaMode.QMS_ONLY,
+                        dwellUntilMs = dwellUntilMs
+                    )
+                } else {
+                    state
+                }
         }
     }
 

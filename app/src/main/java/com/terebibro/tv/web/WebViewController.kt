@@ -17,6 +17,9 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.webkit.ScriptHandler
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.terebibro.tv.server.MainThreadBridge
 import com.terebibro.tv.util.SafeLog
 
@@ -63,6 +66,16 @@ class WebViewController(
     private var container: FrameLayout? = null
     private var homeUrlFallback: String = ""
 
+    /**
+     * The QMS bridge callback and the injected script. Both are held here so a
+     * rebuilt WebView can be given them again: replacing the WebView drops the
+     * JavaScript interface and every document-start handler with it.
+     */
+    private var qmsSignalCallback: ((String, String?) -> Unit)? = null
+    private var qmsScript = ""
+    private var qmsOrigin = ""
+    private var qmsHandler: ScriptHandler? = null
+
     private var loading = false
     private var progress = 0
     private var title = ""
@@ -95,7 +108,9 @@ class WebViewController(
     /** Must run on the UI thread. */
     fun detach() {
         listener.onHideCustomView()
+        removeQmsHandler()
         webView?.let { view ->
+            view.removeJavascriptInterface(BRIDGE_NAME)
             view.onPause()
             container?.removeView(view)
             view.destroy()
@@ -221,6 +236,116 @@ class WebViewController(
         return true
     }
 
+    // ---------------------------------------------------------------------
+    // QMS bridge and injected script
+    // ---------------------------------------------------------------------
+
+    /**
+     * Remembers the content-free signal sink. Registering the actual
+     * `@JavascriptInterface` is done by [setQmsScript], so no bridge exists
+     * while media mode is off — a page must not be able to drive `qmsNow` or
+     * `qmsLocation` when nothing consumes them.
+     */
+    fun setQmsSignalSink(callback: (String, String?) -> Unit) {
+        dispatch {
+            qmsSignalCallback = callback
+            true
+        }
+    }
+
+    /**
+     * Installs [script] for [origin], preferring the document-start API and
+     * falling back to evaluation at both `onPageStarted` and `onPageFinished`.
+     * The script is idempotent by design, so the fallback may install it twice.
+     *
+     * The JavaScript interface lives and dies with the script: it is registered
+     * here when a script is installed and removed when the script is empty
+     * (media mode off), so no bridge is exposed on the V1 path.
+     *
+     * An empty script removes any previous installation.
+     */
+    fun setQmsScript(script: String, origin: String) {
+        dispatch {
+            qmsScript = script
+            qmsOrigin = origin
+            val view = webView
+            if (view != null) {
+                if (qmsScript.isEmpty()) {
+                    view.removeJavascriptInterface(BRIDGE_NAME)
+                } else {
+                    applyQmsBridge(view)
+                }
+                applyQmsScriptTo(view)
+                // Enabling media mode while the QMS page is already open must
+                // start detection now; a document-start rule only applies to
+                // the next document. The script's own guard keeps this
+                // idempotent and its origin gate keeps other pages out.
+                if (script.isNotEmpty() && origin.isNotEmpty()) {
+                    view.evaluateJavascript(script, null)
+                }
+            }
+            true
+        }
+    }
+
+    /** Diagnostics: whether this WebView supports document-start injection. */
+    fun documentStartSupported(): Boolean =
+        WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+
+    /** Runs a controller-built snippet against the current page; any thread. */
+    fun evaluateQms(script: String) {
+        dispatch {
+            webView?.evaluateJavascript(script, null)
+            true
+        }
+    }
+
+    private fun applyQmsBridge(view: WebView) {
+        // With media mode off there is no script and therefore no bridge: the
+        // interface is the script's privilege, not the WebView's default.
+        if (qmsScript.isEmpty()) return
+        val callback = qmsSignalCallback ?: return
+        view.removeJavascriptInterface(BRIDGE_NAME)
+        view.addJavascriptInterface(QmsBridge(callback), BRIDGE_NAME)
+    }
+
+    private fun applyQmsScriptTo(view: WebView) {
+        // A rebuilt WebView removes its handler with it; a stale handler must
+        // not be removed against a destroyed view.
+        removeQmsHandler()
+        if (qmsScript.isEmpty() || qmsOrigin.isEmpty()) return
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            try {
+                qmsHandler = WebViewCompat.addDocumentStartJavaScript(
+                    view,
+                    qmsScript,
+                    setOf(qmsOrigin)
+                )
+                return
+            } catch (e: Exception) {
+                // An origin the current WebView rejects must not take the page
+                // down; the page-load fallback below still runs the script.
+                SafeLog.w(TAG, "Document-start QMS script rejected; using fallback")
+            }
+        }
+    }
+
+    private fun removeQmsHandler() {
+        try {
+            qmsHandler?.remove()
+        } catch (e: Exception) {
+            // The view may already be destroyed (renderer crash, rebuild).
+        }
+        qmsHandler = null
+    }
+
+    /** The fallback injection path, used when document-start is unsupported. */
+    private fun injectQmsFallback(view: WebView) {
+        if (qmsHandler != null) return
+        if (qmsScript.isEmpty() || qmsOrigin.isEmpty()) return
+        view.evaluateJavascript(qmsScript, null)
+    }
+
     /** Must run on the UI thread. */
     fun clearCacheOnMain(): Boolean {
         webView?.clearCache(true)
@@ -305,6 +430,10 @@ class WebViewController(
         }
         val replacement = createWebView()
         webView = replacement
+        // A new WebView has neither the JavaScript interface nor the
+        // document-start handler; both are re-applied before the first load.
+        applyQmsBridge(replacement)
+        applyQmsScriptTo(replacement)
         target.addView(
             replacement,
             FrameLayout.LayoutParams(
@@ -342,6 +471,7 @@ class WebViewController(
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
             loading = true
             progress = 0
+            injectQmsFallback(view)
             listener.onWebPageStarted(url)
             listener.onWebStateChanged()
         }
@@ -358,6 +488,10 @@ class WebViewController(
                 view.clearHistory()
                 pendingClearHistory = false
             }
+            // Either callback may be the first on a given device, so the
+            // fallback installs at both ends of the load; the script's guard
+            // makes the second attempt a no-op.
+            injectQmsFallback(view)
             listener.onWebPageFinished(url)
             listener.onWebStateChanged()
         }
@@ -407,5 +541,6 @@ class WebViewController(
 
     private companion object {
         const val TAG = "WebViewController"
+        const val BRIDGE_NAME = "terebiQms"
     }
 }

@@ -324,6 +324,36 @@ class MediaSettingsValidatorTest {
         assertEquals("qmsLocationSelector", invalid(MediaUpdate(qmsLocationSelector = "span{")).field)
     }
 
+    @Test
+    fun `a selector cannot break the stylesheet scope`() {
+        // A comma ends the `html[data-terebi-strip] …` scope.
+        val comma = invalid(MediaUpdate(qmsStripSelector = "main > div, body"))
+        assertEquals("qmsStripSelector", comma.field)
+        assertTrue(comma.message.contains("qmsStripSelector"))
+        assertTrue(comma.message.contains("single, comment-free selector"))
+
+        // These shapes are checked on every selector-bearing field.
+        assertEquals("qmsNumberSelector", invalid(MediaUpdate(qmsNumberSelector = "span/*")).field)
+        assertEquals("qmsLocationSelector", invalid(MediaUpdate(qmsLocationSelector = "span*/")).field)
+        assertEquals("qmsTimeSelector", invalid(MediaUpdate(qmsTimeSelector = "span[title=\"x]")).field)
+
+        // An even number of quotes is a well-formed attribute selector.
+        valid(MediaUpdate(qmsStripSelector = "main > div[data-x=\"y\"]"))
+    }
+
+    @Test
+    fun `the documented default selectors are accepted`() {
+        val defaults = MediaSettings()
+        valid(
+            MediaUpdate(
+                qmsStripSelector = defaults.qmsStripSelector,
+                qmsNumberSelector = defaults.qmsNumberSelector,
+                qmsLocationSelector = defaults.qmsLocationSelector,
+                qmsTimeSelector = defaults.qmsTimeSelector
+            )
+        )
+    }
+
     // ------------------------------------------------------------------- enums
 
     @Test

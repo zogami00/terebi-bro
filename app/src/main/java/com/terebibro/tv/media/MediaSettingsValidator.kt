@@ -200,6 +200,9 @@ object MediaSettingsValidator {
         if (value.contains('{') || value.contains('}')) {
             return Result.Invalid(field, "$field must not contain '{' or '}'")
         }
+        if (QmsStripCss.selectorBreaksScope(value)) {
+            return Result.Invalid(field, "$field must be a single, comment-free selector")
+        }
         return null
     }
 
