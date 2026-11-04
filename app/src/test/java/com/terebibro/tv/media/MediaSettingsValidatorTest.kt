@@ -52,7 +52,6 @@ class MediaSettingsValidatorTest {
         volumePercent = 70,
         mediaFillMode = MediaFillMode.COVER,
         newCallHighlight = false,
-        stripPosition = StripPosition.RIGHT,
         uiScale = 120
     )
 
@@ -89,7 +88,6 @@ class MediaSettingsValidatorTest {
         assertEquals(current.volumePercent, settings.volumePercent)
         assertEquals(current.mediaFillMode, settings.mediaFillMode)
         assertEquals(current.newCallHighlight, settings.newCallHighlight)
-        assertEquals(current.stripPosition, settings.stripPosition)
         assertEquals(current.uiScale, settings.uiScale)
     }
 
@@ -344,11 +342,6 @@ class MediaSettingsValidatorTest {
     }
 
     @Test
-    fun `an unknown strip position is rejected on its own field`() {
-        assertEquals("stripPosition", invalid(MediaUpdate(stripPosition = "left")).field)
-    }
-
-    @Test
     fun `every documented enum wire value round-trips`() {
         assertEquals(CallSource.DOM_OR_AUDIO, valid(MediaUpdate(callSource = "dom_or_audio")).callSource)
         assertEquals(CallSource.AUDIO, valid(MediaUpdate(callSource = "audio")).callSource)
@@ -357,7 +350,6 @@ class MediaSettingsValidatorTest {
         assertEquals(UiLanguage.TA, valid(MediaUpdate(uiLanguage = "ta")).uiLanguage)
         assertEquals(MediaFillMode.LETTERBOX, valid(MediaUpdate(mediaFillMode = "letterbox")).mediaFillMode)
         assertEquals(MediaFillMode.COVER, valid(MediaUpdate(mediaFillMode = "cover")).mediaFillMode)
-        assertEquals(StripPosition.RIGHT, valid(MediaUpdate(stripPosition = "right")).stripPosition)
     }
 
     // ------------------------------------------------------------------ merging

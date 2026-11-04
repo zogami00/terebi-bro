@@ -7,7 +7,7 @@ import org.junit.Test
 
 class MediaSettingsRecoveryTest {
 
-    /** A settings object where none of the 28 fields holds its default. */
+    /** A settings object where none of the 27 fields holds its default. */
     private fun nonDefault() = MediaSettings(
         enabled = true,
         qmsUrl = "https://qms.example/board",
@@ -35,7 +35,6 @@ class MediaSettingsRecoveryTest {
         volumePercent = 70,
         mediaFillMode = MediaFillMode.COVER,
         newCallHighlight = false,
-        stripPosition = StripPosition.RIGHT,
         uiScale = 120
     )
 
@@ -66,7 +65,6 @@ class MediaSettingsRecoveryTest {
         Keys.VOLUME_PERCENT to settings.volumePercent,
         Keys.FILL_MODE to settings.mediaFillMode.wire,
         Keys.NEW_CALL_HIGHLIGHT to settings.newCallHighlight,
-        Keys.STRIP_POSITION to settings.stripPosition.wire,
         Keys.UI_SCALE to settings.uiScale
     )
 
@@ -90,7 +88,7 @@ class MediaSettingsRecoveryTest {
     }
 
     @Test
-    fun `a wrong typed field does not discard the other twenty seven`() {
+    fun `a wrong typed field does not discard the other twenty six`() {
         val expected = nonDefault()
         val raw = rawOf(expected)
         raw[Keys.VOLUME_PERCENT] = "not a number"
@@ -114,14 +112,12 @@ class MediaSettingsRecoveryTest {
         val raw = rawOf(expected)
         raw[Keys.UI_LANGUAGE] = "fr"
         raw[Keys.FILL_MODE] = "stretch"
-        raw[Keys.STRIP_POSITION] = "left"
         raw[Keys.CALL_SOURCE] = "microphone"
 
         val recovered = MediaSettingsRecovery.recover(raw)
 
         assertEquals(UiLanguage.MS, recovered.uiLanguage)
         assertEquals(MediaFillMode.LETTERBOX_BLUR, recovered.mediaFillMode)
-        assertEquals(StripPosition.BOTTOM, recovered.stripPosition)
         assertEquals(CallSource.DOM, recovered.callSource)
         assertEquals(expected.mediaSplitPercent, recovered.mediaSplitPercent)
     }

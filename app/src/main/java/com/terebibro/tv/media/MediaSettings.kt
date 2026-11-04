@@ -34,16 +34,6 @@ enum class MediaFillMode(val wire: String) {
     }
 }
 
-/** Where the two strip bands sit relative to the media band. */
-enum class StripPosition(val wire: String) {
-    BOTTOM("bottom"),
-    RIGHT("right");
-
-    companion object {
-        fun fromWire(value: String): StripPosition? = entries.firstOrNull { it.wire == value }
-    }
-}
-
 /**
  * Immutable, effective media-mode configuration. Pure-JVM (no Android types),
  * so the validator/merge logic can be unit-tested and never depends on
@@ -79,6 +69,5 @@ data class MediaSettings(
     val volumePercent: Int = 100,
     val mediaFillMode: MediaFillMode = MediaFillMode.LETTERBOX_BLUR,
     val newCallHighlight: Boolean = true,
-    val stripPosition: StripPosition = StripPosition.BOTTOM,
     val uiScale: Int = 100
 )

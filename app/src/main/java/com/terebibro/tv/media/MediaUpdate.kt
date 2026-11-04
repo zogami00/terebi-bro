@@ -35,6 +35,5 @@ data class MediaUpdate(
     val volumePercent: Int? = null,
     val mediaFillMode: String? = null,
     val newCallHighlight: Boolean? = null,
-    val stripPosition: String? = null,
     val uiScale: Int? = null
 )

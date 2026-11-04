@@ -1,6 +1,7 @@
 package com.terebibro.tv.media
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaLayoutTest {
@@ -59,9 +60,37 @@ class MediaLayoutTest {
     }
 
     @Test
-    fun `the strip position does not change the band arithmetic`() {
-        val right = MediaSettings(stripPosition = StripPosition.RIGHT)
-        assertEquals(MediaLayout.bands(1080, cfg), MediaLayout.bands(1080, right))
+    fun `px bands sum exactly at every fractional density and tested height`() {
+        val heights = listOf(720, 1080, 2160, 721, 1081, 1, 2, 0)
+        for (density in listOf(1.0f, 1.5f, 2.0f, 2.75f)) {
+            for (height in heights) {
+                val bands = MediaLayout.bandsPx(height, density, cfg)
+                assertEquals(
+                    "height=$height density=$density",
+                    height,
+                    bands.mediaPx + bands.headerPx + bands.queuePx
+                )
+                assertEquals(height - bands.headerPx - bands.queuePx, bands.mediaPx)
+                assertTrue("media must never go negative", bands.mediaPx >= 0)
+                assertTrue("header must never go negative", bands.headerPx >= 0)
+                assertTrue("queue must never go negative", bands.queuePx >= 0)
+            }
+        }
+    }
+
+    @Test
+    fun `px remainder always goes to the media band`() {
+        val bands = MediaLayout.bandsPx(1081, 1.5f, cfg)
+        assertEquals(76, bands.headerPx)
+        assertEquals(238, bands.queuePx)
+        assertEquals(1081 - 76 - 238, bands.mediaPx)
+    }
+
+    @Test
+    fun `every fill mode maps to its image treatment`() {
+        assertEquals(MediaLayout.Fill.FIT_OVER_BACKDROP, MediaLayout.fillFor(MediaFillMode.LETTERBOX_BLUR))
+        assertEquals(MediaLayout.Fill.FIT, MediaLayout.fillFor(MediaFillMode.LETTERBOX))
+        assertEquals(MediaLayout.Fill.CROP, MediaLayout.fillFor(MediaFillMode.COVER))
     }
 
     @Test

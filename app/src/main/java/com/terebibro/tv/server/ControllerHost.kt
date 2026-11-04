@@ -65,6 +65,9 @@ interface ControllerHost {
     /** Called after the persisted media settings change, so the mode is re-derived. */
     fun onMediaSettingsChanged()
 
+    /** Plays an ad-hoc URL on the media band; `invalid_url` for a non-http(s) value. */
+    fun openMediaUrl(url: String): ApiResult
+
     /** The dp metrics the layout is authored against. */
     fun screenMetrics(): ScreenMetrics
 }

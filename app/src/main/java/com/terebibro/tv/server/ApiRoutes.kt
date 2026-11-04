@@ -117,6 +117,7 @@ class ApiRoutes(
             Route(Method.POST, true, MEDIA_SETTING_KEYS, handler = { _, _, v -> setMediaSettings(v) })
         )
         put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
+        put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> mediaOpen(v) }))
 
         put(Method.GET to "/ws", Route(Method.GET, false, emptySet(), handler = { _, _, _ ->
             Http.error(Response.Status.BAD_REQUEST, "websocket_required", "Use a WebSocket upgrade")
@@ -532,7 +533,6 @@ class ApiRoutes(
                 volumePercent = Json.optionalInt(values, "volumePercent"),
                 mediaFillMode = Json.optionalString(values, "mediaFillMode", MAX_ENUM_WIRE),
                 newCallHighlight = Json.optionalBool(values, "newCallHighlight"),
-                stripPosition = Json.optionalString(values, "stripPosition", MAX_ENUM_WIRE),
                 uiScale = Json.optionalInt(values, "uiScale")
             )
         } catch (e: Json.BadJson) {
@@ -564,6 +564,12 @@ class ApiRoutes(
                 "mode must be qms_only, media_only or split"
             )
         return respond(host.setMediaMode(mode))
+    }
+
+    /** Plays an ad-hoc URL now; the same `UrlValidator` as `/api/nav/open`. */
+    private fun mediaOpen(values: Map<String, Json.Value>): Response {
+        val url = Json.requireString(values, "url", UrlValidator.MAX_LENGTH)
+        return respond(host.openMediaUrl(url))
     }
 
     /**
@@ -599,7 +605,6 @@ class ApiRoutes(
             "volumePercent" to settings.volumePercent,
             "mediaFillMode" to settings.mediaFillMode.wire,
             "newCallHighlight" to settings.newCallHighlight,
-            "stripPosition" to settings.stripPosition.wire,
             "uiScale" to settings.uiScale,
             "runtime" to mapOf(
                 "mode" to mode,
@@ -657,7 +662,7 @@ class ApiRoutes(
             "currentNumberPx", "historyNumberPx", "labelPx", "currentCardPx",
             "historyCardMinPx", "historyCardMaxPx", "uiLanguage", "mediaLocalEnabled",
             "playlistEnabled", "playlistUrl", "playlistRefreshSec", "imageDurationSec",
-            "volumePercent", "mediaFillMode", "newCallHighlight", "stripPosition", "uiScale"
+            "volumePercent", "mediaFillMode", "newCallHighlight", "uiScale"
         )
     }
 }
