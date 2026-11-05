@@ -875,9 +875,9 @@ bodies and WebSocket `auth` messages are never logged.
 
 - `docs/implementation-plan.md` — the original implementation plan (verbatim).
 - `docs/v1-scope.md` — what V1 ships and what was deliberately deferred.
-- `docs/v2-scope.md` — what V2 adds: media mode, the split layout, QMS
-  detection, the media library and playlist, the chime, and the verification
-  caveats.
+- `docs/v2-scope.md` — what V2 (QMS + media) adds: media mode, the split
+  layout, QMS detection, the media library and playlist, the chime, the
+  trade-off behind each decision, and the verification caveats.
 
 ## Verification status
 
