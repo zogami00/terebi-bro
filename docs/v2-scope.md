@@ -10,8 +10,10 @@ the same MQTT surface.
 
 This is a scope document, not a design spec for a greenfield app. It states what
 V2 ships, what it deliberately does not ship, and the cost of each decision in
-plain terms. It describes **shipping scope, not shipped code** — see
-[Verification](#verification).
+plain terms. Where the implementation settled something differently, the
+difference is recorded rather than smoothed over — see
+[Deviations accepted during implementation](#deviations-accepted-during-implementation)
+and [Verification](#verification).
 
 Everything below is conditional on one switch. See
 [Deviation: media mode is off by default](#deviation-media-mode-is-off-by-default).
@@ -31,8 +33,9 @@ Everything below is conditional on one switch. See
   [Boot and activation](#boot-and-activation).
 - `SPLIT` (the default once media mode is enabled and the dashboard is
   rendering) puts the QMS strip in a bottom band under a letterboxed media
-  band; `stripPosition` can put it on the right instead for comparison on the
-  real TV.
+  band. That bottom arrangement is the only one — see
+  [Deliberately deferred](#deliberately-deferred) for the right-hand variant
+  that was specified but not built.
 - Automatic promotion to `QMS_FOCUS` on a detected call, held for `dwellSec`
   (default 50 s) and then returned to the previous mode.
 - Manual mode override from the controller or MQTT: `MEDIA_ONLY` holds for
@@ -430,10 +433,11 @@ the value follows whatever the device reports. The split is a pure function
 the screen height, because a 1 px overlap is a visible seam and a 1 px gap is a
 black line across the TV.
 
-`stripPosition = "right"` puts the two strip bands in a right-hand column: the
-header share on top and the cards below it, with the media band taking the
-remaining width. It exists so the two arrangements can be compared on the
-reference TV and is not a second supported design.
+Only the bottom arrangement ships. `stripPosition = "right"` — the two strip
+bands in a right-hand column, with the media band taking the remaining width —
+was specified and validated but never implemented, so the setting was **removed**
+rather than published as a switch that does nothing. It is listed in
+[Deliberately deferred](#deliberately-deferred).
 
 ### Media band
 
@@ -640,8 +644,8 @@ changes**.
 ### Structural selectors
 
 Observed from the vendor page, not verified against a captured fixture — there
-is no vendor markup in this repository. They are configurable, with these
-defaults:
+is no vendor markup in this repository, so none of these selectors has ever been
+matched against captured HTML. They are configurable, with these defaults:
 
 | Element | Selector | Setting |
 | --- | --- | --- |
@@ -655,6 +659,15 @@ defaults:
 
 The right column (`main > div:nth-child(2)` — hero number and QR block) is
 hidden in strip mode.
+
+A configured selector is validated as **one selector in one scope**. A value
+containing a comma, a CSS comment (`/*` or `*/`) or an unbalanced double quote is
+rejected, because a comma starts a second selector outside the
+`html[data-terebi-strip]` scope, a comment swallows every rule after it, and an
+odd quote opens a string that eats the next rule's prelude. The stylesheet
+builder re-checks and falls back to the slot's default, because a value recovered
+from stored state can bypass the validator; either way the selector cannot escape
+the stylesheet scope.
 
 ### Call key
 
@@ -856,8 +869,12 @@ body reader by a misbehaving client, and it would put a filename in a URL, which
 lands in logs and browser history. The header is read once, validated once, and
 never echoed.
 
-Write path: stream to `<hash>.part`, then atomically rename. A partial file is
-never visible to the playlist.
+Write path: stream to `.upload-<uuid>.part` inside the media folder, then
+atomically rename onto the validated name. A partial file is never visible to the
+queue; the target name is claimed with `createNewFile` before the rename, so an
+upload cannot overwrite a file an `adb push` put there — a duplicate is refused
+with `409 duplicate_name`. Uploads are handled one at a time; a second concurrent
+request is refused with `409 upload_in_progress`.
 
 Bounds — reviewer-grade requirements, not aspirations:
 
@@ -867,11 +884,11 @@ Bounds — reviewer-grade requirements, not aspirations:
 | Files | 200 |
 | Total | 2 GiB |
 | Free-space reserve | 256 MiB, checked **before** the write |
-| Concurrency | 3 uploads |
+| Concurrency | 1 upload at a time (`409 upload_in_progress` beyond that) |
 | Rate | 6/min per token |
 | Missing `Content-Length` | `411 Length Required` |
 | Oversize | `413 Payload Too Large` |
-| Disk full / reserve breached | `507` (or `409` when quota is the cause), partial file deleted |
+| Disk full / reserve / quota / file count | `507`, coded `disk_full` / `quota_exceeded` / `too_many_files`; partial file deleted |
 | Bad type | `415 Unsupported Media Type` |
 
 Validation of the content, in order:
@@ -887,19 +904,23 @@ Validation of the content, in order:
 
 Filenames:
 
-- regex-bounded length and character set;
-- **never used as paths** — stored as a hash, with the display name kept in a
-  manifest;
+- regex-bounded length and character set:
+  `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\.(mp4|jpg|jpeg|png)$`;
+- **stored under the validated name** (`id = name`), with no manifest, so the
+  folder stays manageable by `adb push` and a USB stick — see
+  [Deviations accepted during implementation](#deviations-accepted-during-implementation);
 - `..`, path separators, control characters, a leading dot and reserved names
   are refused with `400`;
-- serve-back is by opaque id only, with `canonicalPath.startsWith(dir)` plus a
-  symlink check, `X-Content-Type-Options: nosniff`, `Content-Disposition:
-  inline`, never `text/html`, and **no `Range` support**.
+- serve-back resolves the name to a direct child of the canonical media folder,
+  refuses a symlink and re-checks the canonical parent, with
+  `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, never
+  `text/html`, and **no `Range` support** — so a video preview streams from the
+  start.
 
 Preview is capped at 32 MiB (constant, not a setting): a larger preview is a
 download, and the controller is a phone.
 
-**Blast radius.** A failed upload can leave at most one `<hash>.part` file of
+**Blast radius.** A failed upload can leave at most one `.part` file of
 bounded size, deleted on failure and swept at boot. It cannot damage an existing
 library entry (the rename is atomic), cannot reach tokens or configuration
 (media lives outside `filesDir`), and cannot exceed the quota, because quota and
@@ -952,10 +973,10 @@ sense that they can be tuned, but their unit is "1080p pixels", not screen pixel
 | --- | --- | --- | --- |
 | `mediaModeEnabled` | bool | `false` | Master switch; off means V1 behaviour. |
 | `qmsUrl` | string | existing Home URL | `UrlValidator`; `http`/`https` only. A **blank** stored value resolves to the Home URL **at read time** and is never persisted as the substituted value, so it keeps tracking the Home URL. |
-| `qmsStripSelector` | string | `main > div:nth-child(1)` | Non-blank, length-bounded. |
-| `qmsNumberSelector` | string | `div:first-child > span` | Non-blank, length-bounded. |
-| `qmsLocationSelector` | string | `div:nth-child(2) > span:first-child` | Non-blank, length-bounded. |
-| `qmsTimeSelector` | string | `div:nth-child(2) > span:nth-child(2)` | Non-blank, length-bounded. |
+| `qmsStripSelector` | string | `main > div:nth-child(1)` | Non-blank, length-bounded, single selector; a comma or a CSS comment is refused (see [Structural selectors](#structural-selectors)). |
+| `qmsNumberSelector` | string | `div:first-child > span` | Non-blank, length-bounded, same rule. |
+| `qmsLocationSelector` | string | `div:nth-child(2) > span:first-child` | Non-blank, length-bounded, same rule. |
+| `qmsTimeSelector` | string | `div:nth-child(2) > span:nth-child(2)` | Non-blank, length-bounded, same rule. |
 | `callSource` | enum | `dom` | `dom` \| `dom_or_audio` \| `audio`. |
 | `dwellSec` | int | `50` | 20–180. |
 | `mediaSplitPercent` | int | `71` | 55–85. |
@@ -976,7 +997,6 @@ sense that they can be tuned, but their unit is "1080p pixels", not screen pixel
 | `volumePercent` | int | `100` | 0–100. |
 | `mediaFillMode` | enum | `letterboxBlur` | `letterboxBlur` \| `letterbox` \| `cover`. |
 | `newCallHighlight` | bool | `true` | 1.5 s pulse on the new card. |
-| `stripPosition` | enum | `bottom` | `bottom` \| `right`. |
 | `uiScale` | int | `100` | 80–200, percent. Manual multiplier on `renderScale` for the **vendor page only**, applied with `setInitialScale`. Not applied to the media band or the strip. |
 
 Hardcoded as constants, **not** settings, and documented here so that "why can't
@@ -1008,10 +1028,10 @@ strict JSON.
 | `POST` | `/api/settings/media` | Replace it as a whole; `400` names the bad field. |
 | `POST` | `/api/media/mode` | Manual mode (`qms_only`, `media_only`, `split`); `media_only` holds 30 min, `qms_only` indefinitely, `split` drops any hold. |
 | `POST` | `/api/media/open` | Play an ad-hoc URL now; `{"url": "..."}`, the same `UrlValidator` and `invalid_url` as `/api/nav/open`; overrides the queue until another source is chosen. |
-| `GET` | `/api/media/files` | Library: id, display name, size, type. |
+| `GET` | `/api/media/files` | Library: `name`, `bytes`, `kind`, `modifiedMs`, plus totals and caps. |
 | `POST` | `/api/media/upload` | Binary stream; `X-Terebi-Filename`; see [Media upload](#media-upload). |
-| `POST` | `/api/media/delete` | Delete by opaque id. |
-| `GET` | `/api/media/file` | Serve by opaque id (preview); no `Range`. |
+| `POST` | `/api/media/delete` | Delete one file by `{"name": "..."}`. |
+| `GET` | `/api/media/file` | Serve one stored file whole, named by `X-Terebi-Filename` (preview); no `Range`. |
 
 `GET /api/settings/media` returns every writable key plus a **read-only
 `runtime` object** holding `mode` and `renderScale`. `POST` accepts **only the
@@ -1046,8 +1066,9 @@ MQTT additions (M4, additive only):
 
 - actions `media-next`, `media-play`, `media-pause`, `set-mode` in
   `app/src/main/java/com/terebibro/tv/mqtt/MqttCommand.kt`;
-- three Home Assistant buttons (next, play/pause, mode) and two sensors (current
-  mode, now-serving call number) in `MqttDiscovery`;
+- three Home Assistant **buttons** (next, play, pause) and two **sensors** (mode,
+  now-serving call number) in `MqttDiscovery` — Mode is a sensor reading
+  `mediaMode`, not a button;
 - `<base>/status` inherits the new state fields unchanged.
 
 An unknown or malformed action still produces the existing
@@ -1106,8 +1127,8 @@ mocks; the decision is extracted into an object and tested exhaustively:
 - `MediaSettingsValidatorTest` — every range, every enum, the band-sum rule,
   and "one bad field writes nothing".
 - `MediaLayoutTest` — 1080p, 720p at both 540 dp and 720 dp, 3840×2160 dp and a
-  non-16:9 aspect; `renderScale` derived from reported dp, both strip positions,
-  integer rounding, parts always sum exactly.
+  non-16:9 aspect; `renderScale` derived from reported dp, the single bottom
+  arrangement, integer rounding, parts always sum exactly.
 - `MediaFileRulesTest` — extension/magic-byte pairing, filename refusals (`..`,
   separators, control characters, leading dot, reserved names).
 - `MediaPlaylistTest` — strict parsing, item cap, size cap, scheme refusal,
@@ -1153,8 +1174,8 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
 13. Back ladder in all four modes.
 14. D-pad does not activate invisible QMS controls in media modes.
 15. Upload of a large file succeeds and plays; wrong magic bytes → `415`;
-    `..` in the filename → `400`; quota → `409` with pairing still working after
-    a reboot.
+    `..` in the filename → `400`; a duplicate name → `409`; quota → `507` with
+    pairing still working after a reboot.
 16. 24 h soak: flat memory, stable decoder count.
 17. CJK and Tamil labels render without tofu, at 4K as well as 1080p.
 18. After a kill/relaunch the app is back at `QMS_ONLY` full screen — never
@@ -1172,6 +1193,9 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
   plus JPEG and PNG stills, and that is what signage needs. See
   [HLS, HEVC and Jellyfin](#hls-hevc-and-jellyfin) for what each one would
   actually require and why none of it is a dependency swap.
+- **`stripPosition = "right"`.** A right-hand strip column was specified and
+  validated but never implemented; the setting was removed rather than published
+  as a switch with no effect. The bottom arrangement is the only one.
 - **`Range` / seek in preview.** Previews are short; seeking is a controller
   feature nobody has asked for.
 - **Thumbnails.** The controller lists names and sizes, not frames.
@@ -1184,17 +1208,95 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
 - **Per-item playlist scheduling beyond `durationSec`.** No per-item windows.
 - **A second WebView.** One WebView is a design constraint, not an oversight.
 
+## Deviations accepted during implementation
+
+Five places where the build settled differently from the scope above. Each is
+recorded here because this document is what someone reads before they trust the
+code.
+
+- **Media is stored under the validated filename** (`id = name`), not under a
+  hash with a manifest, so the folder stays usable by hand and both `adb push`
+  and a USB stick keep working. Traversal safety comes from the anchored
+  filename rule plus the canonical-path and symlink checks, and a duplicate name
+  is refused rather than overwritten.
+- **`stripPosition = "right"` was removed** rather than shipped: it was
+  validated and published but never implemented, and a setting that does nothing
+  is worse than no setting. The bottom arrangement is the only one; see
+  [Deliberately deferred](#deliberately-deferred).
+- **`callSource = "audio"` means the DOM updates the text but does not take
+  over** — only the chime moves the screen. The earlier text implied all three
+  values were equivalent in that respect; they are not.
+- **A chime landing within 1 s of a DOM call is treated as the same
+  announcement** and does not re-arm the dwell, because the observer and the
+  chime are describing one call. A chime a second or more later is its own
+  signal.
+- **The preview route has no `Range` support**, so a video preview streams from
+  the start. Seeking in a preview was never in scope.
+
 ## Verification
 
-This document describes **shipping scope, not shipped code**. At the time of
-writing there is no implementation for M1–M4 and therefore no test run, no lint
-run, no device pass and no soak result to report. Nothing in the sections above
-has been exercised on hardware; the mitigations are plans, and the risks are
-open.
+V2 is implemented across six stacked branches, one per milestone: **M1a**
+(settings, reducer and control API), **M1b** (view layer, player and on-device
+controls), **M2** (detection, strip and boot rule), **M3a** (library, upload and
+preview), **M3b** (playlist and four languages) and **M4** (chime, MQTT and this
+document). Each milestone was validated when it was written, by building and by
+JVM unit tests only:
 
-V2's verification section will be written in **M4**, in the same format as V1's:
-the JVM test count, the lint result, the release-build result, the maintainer's
-device pass listed check by check, and the same caveat V1 carries — **one API 28
-unit, no CI, no automated device test suite** — plus the two V2-specific gaps
-that a single unit cannot close: 720p geometry and the media decoder under a
-24 h soak.
+| Milestone | JVM unit tests | `lintDebug` | `assembleDebug` |
+| --- | --- | --- | --- |
+| **M1a** | passed | 0 errors | `app-debug.apk` built |
+| **M1b** | passed | 0 errors | `app-debug.apk` built |
+| **M2** | passed | 0 errors | `app-debug.apk` built |
+| **M3a** | passed | 0 errors | `app-debug.apk` built |
+| **M3b** | passed | 0 errors | `app-debug.apk` built |
+| **M4** | passed | 0 errors | `app-debug.apk` built |
+
+The suite is cumulative, so each milestone's count is a step on the way to the
+final figure: **542 tests, 0 failures, 1 skipped**.
+
+What the JVM tests cover, beyond the V1 suite: the media reducer and layout, the
+settings validator, the QMS call key, signal clamp and injected-script escaping,
+the media queue and playlist parser, the upload rules (filename, magic bytes,
+quota arithmetic and the duplicate refusal), the media state JSON, the strict
+MQTT parser with the four new actions and their key sets, the discovery builder
+with the three new buttons and two new sensors (each button payload re-parsed
+through the real command parser), the `command/result` shape — an existing action
+still reports exactly `{"id":…,"ok":true}`, and a disabled media action adds only
+`applied`/`reason` — and the chime rule (source gating, the 1 s DOM-call
+debounce, and the `audio` source suppressing the DOM takeover while still
+updating the strip text).
+
+`lintDebug` runs with **0 errors**. Its 34 warnings are pre-existing: `setText`
+literals and dependency-version notices in `MainActivity`, plus manifest and
+resource warnings. None is in the media or MQTT code.
+
+**The single skip is the symlink-refusal test.** A Windows host without Developer
+Mode cannot create a symlink, so the test `Assume`s its way out instead of
+running. The refusal itself *is* implemented — `MediaPaths` checks
+`Files.isSymbolicLink` and re-checks the canonical parent before any serve-back —
+but the test that proves it has not executed on this host.
+
+**Nothing was verified on a device.** The injected script has never executed
+against the real QMS page, so selector matching, the strip restyle, the boot rule
+across the daily activation, the CSS on Chromium 66, the upload path, the
+playlist fetch, local and remote playback, the chime, the MQTT actions and the
+Home Assistant entities have not been exercised at runtime. Route-level behaviour
+has no server harness in this repository: no route has been driven end to end,
+only its pure helpers. The media decoder running alongside a live WebView, 720p
+geometry and the 24 h soak remain open.
+
+A first device pass should check three things, in this order:
+
+1. **Does the strip render** — do the four selectors match the live page, and does
+   the restyled band show the vendor's own number, location and time?
+2. **Does the boot rule hold across the daily activation** — a cold start stays
+   full screen through the code form and reaches `SPLIT` only once the dashboard
+   is rendering, and again after a renderer crash or a refresh?
+3. **Does an upload from a phone work end to end** — filename accepted, magic
+   bytes and metadata accepted, the file listed, and the clip or still actually
+   playing in the band?
+
+What this does not cover: there is **no CI, no automated device test suite**, and
+one API 28 unit is not a hardware matrix. The two V2-specific gaps a single unit
+cannot close are 720p geometry and the media decoder under a 24 h soak. Treat V2
+as **unverified at runtime** until a device pass is recorded here.
