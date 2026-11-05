@@ -1359,26 +1359,58 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             deviceOverlay.visibility == View.VISIBLE
 
     /**
-     * Whether the media band's web page owns the remote in `MEDIA_ONLY`. A
-     * page-owned fullscreen view is not the page itself: it sits above the
-     * hidden WebView and must keep the keys while it is up.
+     * Whether the media band's web page owns the D-pad/ENTER keys: media mode
+     * is on, the band is full screen in `MEDIA_ONLY`, the page is the source,
+     * and no overlay is layered above it.
+     *
+     * A page-owned fullscreen view does not make this false. That view is a
+     * plain `View` supplied by Chromium; it is not a key target of its own, so
+     * the keys must still reach the page's WebView, which is `GONE` behind the
+     * view while it is up. [ensureMediaPageFocus] handles that case separately
+     * because an invisible view cannot take focus.
      */
     private fun mediaPageOwnsKeys(): Boolean =
         config.mediaSettings.enabled &&
             mediaController.currentMode() == MediaMode.MEDIA_ONLY &&
             mediaController.isWebSource() &&
-            mediaFullscreenView == null
+            !anyOverlayVisible()
 
     /**
-     * Keeps the media page as the focused view before an unswallowed key is
-     * dispatched. The guard no longer consumes D-pad/ENTER for a page in
-     * `MEDIA_ONLY`, so the key has to land on the WebView itself rather than on
-     * the band container (or a stale focused view).
+     * Keeps the media page as the focused view before a key is routed. Focus is
+     * only a fallback for the first key after a transition: the device has been
+     * observed reporting focus on the page while the page still never saw the
+     * D-pad, so [dispatchKeyEvent] also dispatches directly to the WebView.
+     *
+     * A page-owned fullscreen view covers the band and the WebView is `GONE`:
+     * `requestFocus()` cannot land on it, and the direct dispatch does not need
+     * focus, so it is skipped there.
      */
     private fun ensureMediaPageFocus() {
         if (!::mediaWebSurface.isInitialized) return
-        if (!mediaPageOwnsKeys() || anyOverlayVisible()) return
+        if (!mediaPageOwnsKeys()) return
+        if (mediaFullscreenView != null) return
         if (!mediaWebSurface.hasPageFocus()) mediaController.refocusWeb()
+    }
+
+    /**
+     * Debug-only, content-free record of how a key was routed. It never logs the
+     * URL or the key's character; the enum name and the two booleans are enough
+     * to tell "the guard took it" from "the page took it" in `adb logcat`.
+     */
+    private fun logMediaKeyDispatch(
+        event: KeyEvent,
+        key: MediaKey,
+        guardSwallowed: Boolean,
+        directResult: Boolean? = null
+    ) {
+        if (!BuildConfig.DEBUG) return
+        SafeLog.d(
+            TAG,
+            "media key=${key.name} action=${event.action} " +
+                "mediaOnly=${mediaController.currentMode() == MediaMode.MEDIA_ONLY} " +
+                "web=${mediaController.isWebSource()} guard=$guardSwallowed " +
+                "direct=${directResult?.toString() ?: "n/a"}"
+        )
     }
 
     /** The four overlays (and dialogs) are independent; derive one pause bit from them. */
@@ -1398,7 +1430,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         }
         // Media keys are consumed before the WebView (and before Back, which is
         // not in the media key set) when the current mode owns them.
-        if (handleMediaKey(event)) return true
+        val mediaKey = mediaKeyFor(event.keyCode)
+        if (handleMediaKey(event)) {
+            logMediaKeyDispatch(event, mediaKey, guardSwallowed = true)
+            return true
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
             event.keyCode == KeyEvent.KEYCODE_BACK
         ) {
@@ -1430,6 +1466,21 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 }
                 else -> return true
             }
+        }
+        // A media page in MEDIA_ONLY does not reliably receive keys through
+        // window focus: on the device the WebView reports focus yet never sees
+        // the D-pad. Hand DPAD/ENTER to it directly, for both the press and the
+        // release, and consume the event even when the page ignores it so it
+        // cannot fall through to the hidden QMS page or the band container.
+        // This also covers the page-owned fullscreen view: the keys still go to
+        // the WebView, which is hidden behind that view.
+        if ((mediaKey == MediaKey.DPAD || mediaKey == MediaKey.ENTER) &&
+            mediaPageOwnsKeys()
+        ) {
+            ensureMediaPageFocus()
+            val direct = mediaWebSurface.view?.dispatchKeyEvent(event) == true
+            logMediaKeyDispatch(event, mediaKey, guardSwallowed = false, directResult = direct)
+            return true
         }
         ensureMediaPageFocus()
         return super.dispatchKeyEvent(event)

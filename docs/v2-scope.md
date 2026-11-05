@@ -1106,7 +1106,7 @@ Ranked. Each has either a mitigation or the experiment that settles it.
 | 6 | CJK/Tamil glyph coverage. | Device check; subset font or English fallback, decided after the check. |
 | 7 | Trust boundary on the JS bridge. | Content-free sink, origin gate, 500 ms clamp; residual nuisance flip accepted and documented. |
 | 8 | Upload path accidentally reusing the JSON body reader. | Explicit `BodyKind.Binary`, filename in a header, `.part` + rename, bounded concurrency. |
-| 9 | D-pad/Back reaching the invisible QMS WebView in media modes. | `MediaKeyGuard` + explicit focus routing + `BackOrder.browserHidden`. |
+| 9 | D-pad/Back reaching the invisible QMS WebView in media modes. | `MediaKeyGuard` + direct `WebView.dispatchKeyEvent` for the page (focus is only a fallback) + `BackOrder.browserHidden`. |
 | 10 | Audio focus conflicts (HDMI switch, Bluetooth). | Focus request/abandon/loss matrix, `resumeOnFocusGain` separate from the call path. |
 | 11 | Playlist shape drift, or unreachable at boot. | Strict validation, last-good cache, local fallback. |
 | 12 | Split math and strip typography at 720p vs 1080p. | Pure `MediaLayout.split`, integer rounding, parts always sum. |
@@ -1172,7 +1172,9 @@ Then a **device checklist that cannot be automated**, on the reference Android 9
     full screen until the dashboard renders again.
 12. Overlays pause media and restore focus on close.
 13. Back ladder in all four modes.
-14. D-pad does not activate invisible QMS controls in media modes.
+14. D-pad does not activate invisible QMS controls in media modes; in
+    `media_only` `DPAD`/`ENTER` reach the media-band web page, including while
+    its own fullscreen view is up (confirm the routing line in `adb logcat`).
 15. Upload of a large file succeeds and plays; wrong magic bytes → `415`;
     `..` in the filename → `400`; a duplicate name → `409`; quota → `507` with
     pairing still working after a reboot.
