@@ -544,7 +544,10 @@
     qmsTimeSelector: 'mediaTimeSelectorInput',
     callSource: 'mediaCallSourceInput',
     playlistUrl: 'playlistUrlInput',
-    playlistRefreshSec: 'playlistRefreshInput'
+    playlistRefreshSec: 'playlistRefreshInput',
+    mediaWebUrl: 'mediaWebUrlInput',
+    mediaWebEnabled: 'mediaWebEnabledToggle',
+    mediaSourceDefault: 'mediaSourceDefaultInput'
   };
 
   function clearMediaFieldErrors() {
@@ -596,6 +599,15 @@
       setCheckIfIdle('playlistEnabledToggle', d.playlistEnabled);
       setValueIfIdle('playlistUrlInput', d.playlistUrl);
       setValueIfIdle('playlistRefreshInput', d.playlistRefreshSec);
+      // The stored page URL is only ever returned masked, so it is shown as a
+      // placeholder instead of a value: an untouched field posts nothing and
+      // the server keeps the stored URL (the MQTT password's convention).
+      var webUrlField = $('mediaWebUrlInput');
+      if (webUrlField) {
+        webUrlField.placeholder = d.mediaWebUrl || 'https://jellyfin.example.com/web';
+      }
+      setCheckIfIdle('mediaWebEnabledToggle', d.mediaWebEnabled);
+      setSelectIfIdle('mediaSourceDefaultInput', d.mediaSourceDefault);
       setMediaModeLine(runtime.mode);
       setMediaSourceLine(runtime);
     });
@@ -668,6 +680,13 @@
     body.playlistEnabled = $('playlistEnabledToggle').checked;
     body.playlistUrl = $('playlistUrlInput').value.trim();
     putNumber(body, 'playlistRefreshSec', 'playlistRefreshInput');
+    // Leave blank to keep the stored URL: GET only returns it masked, so an
+    // untouched field must not overwrite it. A `web` startup source with no
+    // stored URL is still a named 400.
+    var webUrl = $('mediaWebUrlInput').value.trim();
+    if (webUrl) body.mediaWebUrl = webUrl;
+    body.mediaWebEnabled = $('mediaWebEnabledToggle').checked;
+    body.mediaSourceDefault = $('mediaSourceDefaultInput').value;
     api('POST', '/api/settings/media', body).then(function (result) {
       if (result.status === 200 && result.json) {
         clearMediaFieldErrors();
@@ -684,6 +703,27 @@
         setMediaModeLine(result.json.mode || mode);
       } else {
         banner(apiError(result));
+      }
+    });
+  }
+
+  /* The media WebView source: one deliberate page, not a queue item. The error
+     stays next to the field instead of the banner so a bad URL is obvious
+     without stealing the whole screen. */
+  function openMediaWeb() {
+    var input = $('mediaWebUrlInput');
+    var error = $('mediaWebError');
+    var url = String(input.value).trim();
+    error.textContent = '';
+    if (!url) {
+      error.textContent = 'Enter a URL';
+      return;
+    }
+    api('POST', '/api/media/open', { url: url, web: true }).then(function (result) {
+      if (result.status === 200 && result.json) {
+        error.textContent = '';
+      } else {
+        error.textContent = apiError(result);
       }
     });
   }
@@ -1016,6 +1056,7 @@
     $('saveMedia').addEventListener('click', saveMedia);
     $('mediaEnabledToggle').addEventListener('change', saveMedia);
     $('playlistEnabledToggle').addEventListener('change', saveMedia);
+    $('openMediaWeb').addEventListener('click', openMediaWeb);
     $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });

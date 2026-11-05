@@ -64,7 +64,9 @@ class MediaController(
      * A 256 KiB cache file is not media, so it may live on internal storage;
      * null disables caching, which only costs the offline cold boot.
      */
-    private val playlistCacheFile: File? = null
+    private val playlistCacheFile: File? = null,
+    /** The media band's second renderer (a web page); no-op when absent. */
+    private val web: MediaWebHost = NoopMediaWebHost
 ) {
 
     private val main = Handler(Looper.getMainLooper())
@@ -75,6 +77,22 @@ class MediaController(
     private var queue: List<MediaItem> = emptyList()
     private var source = ""
     private var index = 0
+
+    /**
+     * The page shown by the media band while [source] is [SOURCE_WEB]. It is a
+     * [MediaItem] for the model's sake — `Kind.WEB`, `id` = URL, `remote` — but
+     * it is never put in [queue]: a page has no next/previous.
+     */
+    private var webItem: MediaItem? = null
+
+    /**
+     * True after an operator or API call deliberately chose a source
+     * (`playUrl`/`openWeb`). A settings save must not yank that choice.
+     */
+    private var explicitSource = false
+
+    /** True once the persisted startup source has been applied this session. */
+    private var sourceDefaultApplied = false
 
     /**
      * The menu's Play/Pause. It is a third pause source beside the overlay and
@@ -151,6 +169,18 @@ class MediaController(
         )
 
     private val currentItem: MediaItem? get() = queue.getOrNull(index)
+
+    /** True when the band is showing anything at all (a page or a queue item). */
+    private val hasSource: Boolean
+        get() = MediaSource.isWeb(source) || currentItem != null
+
+    /**
+     * The pause bit the state broadcast publishes. A pause is only meaningful
+     * while there is something to pause: after a failed page (or an empty
+     * folder) the controller must not claim `mediaPaused` on nothing.
+     */
+    private val pausedForPublish: Boolean
+        get() = paused && hasSource
 
     private val manualExpiry = Runnable {
         val previous = state.mode
@@ -327,6 +357,8 @@ class MediaController(
 
     fun togglePlayPause() {
         if (!state.enabled || currentItem == null) return
+        // A web page is not on the native player; there is nothing to toggle.
+        if (MediaSource.isWeb(source)) return
         val wasPaused = paused
         // While an overlay, the mode or a focus loss holds playback paused the
         // button means "play"; otherwise it flips the operator's own pause.
@@ -341,9 +373,14 @@ class MediaController(
         onChanged()
     }
 
-    /** Explicit pause from the remote or the controller. */
+    /**
+     * Explicit pause from the remote or the controller. A web page has no queue
+     * item but it does have a media clock, so it is a valid pause target too —
+     * otherwise `/api/media/pause`, the MQTT action and the HA button would all
+     * be silent no-ops while a page kept playing audio.
+     */
     fun pause() {
-        if (!state.enabled || currentItem == null) return
+        if (!state.enabled || (currentItem == null && !MediaSource.isWeb(source))) return
         val wasPaused = paused
         manualPaused = true
         focusPaused = false
@@ -372,6 +409,9 @@ class MediaController(
      */
     fun playUrl(url: String) {
         if (!state.enabled) return
+        // A page owns the band until another source is deliberately chosen.
+        web.hide()
+        webItem = null
         // A library read may still be in flight; it must not replace this queue.
         storeGeneration++
         queue = listOf(
@@ -388,9 +428,97 @@ class MediaController(
         index = 0
         manualPaused = false
         focusPaused = false
+        explicitSource = true
         refreshStats()
         publishQueue()
         startCurrent()
+        onChanged()
+    }
+
+    /**
+     * Shows [url] in the media band's web view. The URL is validated here as
+     * well as at the entry points, so a direct call can never load a
+     * non-http(s) scheme.
+     *
+     * A page is not a queue item: the native queue is dropped and the band
+     * publishes `source = "web"` with a count of 0. `next()`/`previous()` and
+     * `togglePlayPause()` are deliberate no-ops while it is active; the only
+     * ways out are another source (`playUrl`, a library reload after media mode
+     * is re-enabled) or leaving media mode.
+     */
+    fun openWeb(url: String): Boolean {
+        if (!state.enabled) return false
+        val validated = when (val result = UrlValidator.validate(url)) {
+            is UrlValidator.Result.Valid -> result.url
+            is UrlValidator.Result.Invalid -> return false
+        }
+        val wasPaused = paused
+        // A library read in flight must not replace this source.
+        storeGeneration++
+        main.removeCallbacks(imageAdvance)
+        imageDeadlineMs = 0L
+        imageRemainingMs = 0L
+        queue = emptyList()
+        index = 0
+        source = SOURCE_WEB
+        webItem = MediaItem(
+            id = validated,
+            name = validated,
+            kind = MediaItem.Kind.WEB,
+            durationMs = 0L,
+            remote = true
+        )
+        manualPaused = false
+        focusPaused = false
+        remoteFailures = 0
+        explicitSource = true
+        // Stop any native playback before the page covers the band.
+        host?.showWeb()
+        web.show(validated)
+        applyWebFocus()
+        // A fresh page starts playing on its own; a pause that is still in
+        // force (an overlay, the lifecycle, a mode hold) applies to it at once.
+        // applyPause below cannot do it, because the predicate did not change.
+        if (paused) web.pause()
+        publishQueue()
+        applyPause(wasPaused)
+        onChanged()
+        return true
+    }
+
+    /**
+     * The media band's page failed to load (a main-frame error, or the renderer
+     * process died). A page that cannot load must never wedge the band: leaving
+     * `source = web` with no error and a hidden page would make
+     * [applyActiveQueue] return early forever, so even clearing the web setting
+     * could not bring the folder back. The page is dropped, the failure is
+     * published, and the folder (or a configured playlist) takes over.
+     */
+    fun onWebLoadFailed() {
+        if (!state.enabled || !MediaSource.isWeb(source)) return
+        dropWebSource(WEB_LOAD_FAILED)
+    }
+
+    /**
+     * Hands the band back to the queue sources after the page goes away.
+     * [error] is published when the page failed on its own; a settings change
+     * that withdrew the page passes null, because nothing went wrong.
+     */
+    private fun dropWebSource(error: String?) {
+        web.hide()
+        webItem = null
+        source = ""
+        queue = emptyList()
+        index = 0
+        manualPaused = false
+        focusPaused = false
+        explicitSource = false
+        if (error != null) dispatch(MediaEvent.PlaybackError(error))
+        publishQueue()
+        // The folder is re-read off the UI thread; its result applies the
+        // fallback queue with advanceOnMissing, so the source that replaced the
+        // page does not wait for a settings change to appear.
+        reloadQueue(reset = false, advanceOnMissing = true)
         onChanged()
     }
 
@@ -507,10 +635,14 @@ class MediaController(
     fun snapshot(): MediaRuntime = MediaRuntime(
         mode = state.mode,
         source = source,
-        item = currentItem?.name ?: "",
+        // The URL is masked before it leaves the app: a Jellyfin or YouTube
+        // link can carry a token in its query or fragment.
+        item = MediaUrl.forPublish(
+            if (MediaSource.isWeb(source)) webItem?.id ?: "" else currentItem?.name ?: ""
+        ),
         index = if (queue.isEmpty()) 0 else index,
         count = queue.size,
-        paused = paused,
+        paused = pausedForPublish,
         error = state.lastError,
         localFiles = localFiles,
         localBytes = localBytes,
@@ -528,6 +660,20 @@ class MediaController(
 
     fun manualUntilMs(): Long = state.manualUntilMs
 
+    /** True when the band's active source is the web page rather than the native player. */
+    fun isWebSource(): Boolean = MediaSource.isWeb(source)
+
+    /**
+     * Gives the media band's page the D-pad again. Called after an overlay or a
+     * dialog closes in `MEDIA_ONLY`: the page is a child of the media container,
+     * so focus has to land on the page itself or the first OK press is lost.
+     */
+    fun refocusWeb() {
+        if (!state.enabled || !MediaSource.isWeb(source)) return
+        web.setFocusable(state.mode == MediaMode.MEDIA_ONLY)
+        if (state.mode == MediaMode.MEDIA_ONLY) web.requestFocus()
+    }
+
     fun release() {
         focusPaused = false
         // A fetch already on the IO thread must not land after this point.
@@ -537,6 +683,7 @@ class MediaController(
         imageRemainingMs = 0L
         host?.release()
         host = null
+        web.destroy()
     }
 
     // ---------------------------------------------------------------------
@@ -601,11 +748,58 @@ class MediaController(
                 playlistActive() -> refreshPlaylist(loadCacheFirst = false)
                 else -> schedulePlaylistRefresh()
             }
+            // After the queue sources are (re)loaded: a persisted default may
+            // start a page instead, and the guard stops a later library read
+            // from yanking it off screen.
+            applyDefaultSource(previous)
         }
         // Strip dimensions, labels and the language all live in settings, so a
         // settings change is also a stylesheet change.
         if (state.enabled && state.mode == MediaMode.SPLIT) applyStrip()
         onChanged()
+    }
+
+    /**
+     * Applies the persisted [MediaSettings.mediaSourceDefault] / web settings
+     * once at startup, and again when one of those fields changes, without ever
+     * interrupting a source the operator explicitly chose.
+     *
+     * `LOCAL` and `PLAYLIST` keep the existing priority (a configured, valid
+     * playlist wins over the folder); only `WEB` (or `mediaWebEnabled`) needs an
+     * action here.
+     */
+    private fun applyDefaultSource(previous: MediaSettings) {
+        if (!state.enabled) return
+        val relevantChange = previous.mediaSourceDefault != cfg.mediaSourceDefault ||
+            previous.mediaWebUrl != cfg.mediaWebUrl ||
+            previous.mediaWebEnabled != cfg.mediaWebEnabled
+        if (sourceDefaultApplied && !relevantChange) return
+        if (explicitSource) return
+        sourceDefaultApplied = true
+        val url = startupWebUrl()
+        if (url == null) {
+            // The persisted settings no longer select a page (the toggle was
+            // cleared or the default changed away from web). A startup page was
+            // not the operator's choice this session, so it must not keep the
+            // band — the folder or playlist takes over the same way a failed
+            // load does.
+            if (MediaSource.isWeb(source)) dropWebSource(error = null)
+            return
+        }
+        // The startup page is not an explicit choice: a later settings change
+        // may replace it.
+        if (openWeb(url)) explicitSource = false
+    }
+
+    /**
+     * The page to open at startup, or null to keep the queue. `mediaWebEnabled`
+     * opens the stored URL; `mediaSourceDefault = web` does too, and the
+     * validator guarantees it has a URL.
+     */
+    private fun startupWebUrl(): String? {
+        if (cfg.mediaWebUrl.isEmpty()) return null
+        if (cfg.mediaSourceDefault != MediaSourceDefault.WEB && !cfg.mediaWebEnabled) return null
+        return cfg.mediaWebUrl
     }
 
     private fun reloadQueue(reset: Boolean, advanceOnMissing: Boolean = false) {
@@ -656,6 +850,13 @@ class MediaController(
         advanceOnMissing: Boolean
     ) {
         if (!state.enabled) return
+        // A web page owns the band until another source is deliberately chosen;
+        // a library reload must not yank it off screen (including the first
+        // read after a startup that chose the page).
+        if (MediaSource.isWeb(source)) {
+            onChanged()
+            return
+        }
         // An ad-hoc URL owns the queue until another source is chosen for it.
         if (source == SOURCE_URL && queue.isNotEmpty() && !reset) {
             onChanged()
@@ -874,6 +1075,8 @@ class MediaController(
 
     private fun skip(step: Int) {
         if (!state.enabled || queue.isEmpty()) return
+        // A web page has no queue to advance through; leave it alone.
+        if (MediaSource.isWeb(source)) return
         val wasPaused = paused
         // A deliberate move is a fresh attempt at a remote queue.
         remoteFailures = 0
@@ -934,6 +1137,11 @@ class MediaController(
         imageRemainingMs = 0L
         manualPaused = false
         focusPaused = false
+        // Leaving media mode (or choosing another source) takes the page down.
+        if (MediaSource.isWeb(source) || web.isShowing) web.hide()
+        webItem = null
+        explicitSource = false
+        sourceDefaultApplied = false
         queue = emptyList()
         source = ""
         index = 0
@@ -996,6 +1204,16 @@ class MediaController(
             MediaMode.SPLIT -> applyStrip()
             MediaMode.QMS_FOCUS, MediaMode.MEDIA_ONLY, MediaMode.QMS_ONLY -> removeStrip()
         }
+        // The web page is only D-pad reachable in the media workspace. Split
+        // leaves it inert so the remote keeps driving the QMS page.
+        applyWebFocus()
+    }
+
+    /** Re-applied on every mode change (and after opening a page). */
+    private fun applyWebFocus() {
+        val focusable = state.mode == MediaMode.MEDIA_ONLY
+        web.setFocusable(focusable)
+        if (focusable) web.requestFocus()
     }
 
     private fun applyStrip() {
@@ -1042,6 +1260,12 @@ class MediaController(
 
     private fun applyPause(wasPaused: Boolean) {
         if (paused == wasPaused) return
+        // The page is a second renderer with its own media clock; the pause
+        // predicate that [MediaPausePolicy] documents has to reach it too, not
+        // only the native host.
+        if (MediaSource.isWeb(source)) {
+            if (paused) web.pause() else web.resume()
+        }
         if (paused) {
             // Closing the timer here keeps the still's leftover dwell, so the
             // resume can finish it rather than restarting the whole delay.
@@ -1127,6 +1351,10 @@ class MediaController(
         const val SOURCE_LOCAL = "local"
         const val SOURCE_PLAYLIST = "playlist"
         const val SOURCE_URL = "url"
+        const val SOURCE_WEB = MediaSource.WEB
+
+        /** Published when the media band's page will not load. */
+        const val WEB_LOAD_FAILED = "The web page could not be loaded"
 
         /** Connect and read timeout for the playlist fetch, in milliseconds. */
         const val PLAYLIST_TIMEOUT_MS = 10_000

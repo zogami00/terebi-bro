@@ -105,8 +105,9 @@ class MediaPathsTest {
     @Test
     fun `targetFor refuses an unsafe name`() {
         assertNull(MediaPaths.targetFor(base, "../new.mp4"))
-        assertNull(MediaPaths.targetFor(base, "new.mkv"))
+        assertNull(MediaPaths.targetFor(base, "new.txt"))
         assertNull(MediaPaths.targetFor(base, ".new.mp4"))
+        assertNotNull(MediaPaths.targetFor(base, "new.mkv"))
     }
 
     @Test

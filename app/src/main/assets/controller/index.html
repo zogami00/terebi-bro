@@ -261,6 +261,30 @@
     <label for="playlistRefreshInput">Playlist refresh (seconds)</label>
     <input id="playlistRefreshInput" type="number" min="30" max="3600" autocomplete="off">
 
+    <p class="warn">Open a single web page in the media band — a Jellyfin UI or a
+    YouTube page. This uses a second WebView (extra memory) and is not a queue
+    item: the playlist and the local folder are ignored while it is open. The
+    D-pad only reaches the page in <strong>Media only</strong>; in Split the
+    remote keeps driving the queue board. The stored URL is returned masked
+    (<code>scheme://host/path</code>) and never logged, so this field shows it
+    as a hint: <strong>leave it blank to keep the stored URL</strong>, or type a
+    new one to replace it.</p>
+
+    <label for="mediaWebUrlInput">Web page URL (http/https)</label>
+    <input id="mediaWebUrlInput" type="text" inputmode="url" autocomplete="off"
+           placeholder="https://jellyfin.example.com/web">
+    <label class="check"><input id="mediaWebEnabledToggle" type="checkbox"> Open this page on start</label>
+    <label for="mediaSourceDefaultInput">Startup source</label>
+    <select id="mediaSourceDefaultInput">
+      <option value="local">Local folder</option>
+      <option value="playlist">HTTP playlist</option>
+      <option value="web">Web page</option>
+    </select>
+    <div class="row">
+      <button id="openMediaWeb">Open in media</button>
+    </div>
+    <p id="mediaWebError" class="error"></p>
+
     <p id="mediaSourceState" class="muted"></p>
 
     <div class="row">

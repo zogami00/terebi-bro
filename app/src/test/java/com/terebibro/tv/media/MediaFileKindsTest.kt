@@ -26,9 +26,16 @@ class MediaFileKindsTest {
     }
 
     @Test
+    fun `the new video containers are playable`() {
+        assertEquals(MediaItem.Kind.VIDEO, MediaFileKinds.of("clip.m4v"))
+        assertEquals(MediaItem.Kind.VIDEO, MediaFileKinds.of("clip.mov"))
+        assertEquals(MediaItem.Kind.VIDEO, MediaFileKinds.of("movie.mkv"))
+        assertEquals(MediaItem.Kind.VIDEO, MediaFileKinds.of("clip.webm"))
+    }
+
+    @Test
     fun `an unknown extension is not playable`() {
         assertNull(MediaFileKinds.of("notes.txt"))
-        assertNull(MediaFileKinds.of("movie.mkv"))
         assertNull(MediaFileKinds.of("song.mp3"))
     }
 

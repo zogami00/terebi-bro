@@ -25,6 +25,7 @@
     <string name="menu_media_play_pause">Play / Pause</string>
     <string name="menu_media_next">Next file</string>
     <string name="menu_media_url">Play from URL</string>
+    <string name="menu_media_web">Open web in media</string>
     <string name="menu_media_mode">Media mode</string>
     <string name="media_placeholder">No media</string>
     <string name="enter_url_title">Enter URL</string>

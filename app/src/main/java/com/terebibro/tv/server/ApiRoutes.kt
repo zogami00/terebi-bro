@@ -13,6 +13,7 @@ import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaSettingsValidator
 import com.terebibro.tv.media.MediaStore
 import com.terebibro.tv.media.MediaUpdate
+import com.terebibro.tv.media.MediaUrl
 import com.terebibro.tv.mqtt.MqttSettingsValidator
 import com.terebibro.tv.mqtt.MqttUpdate
 import com.terebibro.tv.net.ClientNetworks
@@ -138,7 +139,7 @@ class ApiRoutes(
             Route(Method.POST, true, MEDIA_SETTING_KEYS, handler = { _, _, v -> setMediaSettings(v) })
         )
         put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
-        put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> mediaOpen(v) }))
+        put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url", "web"), handler = { _, _, v -> mediaOpen(v) }))
         // Forces a library re-read while the app is in the foreground. A push
         // that leaves the folder's mtime unchanged is otherwise invisible until
         // the next resume.
@@ -597,6 +598,9 @@ class ApiRoutes(
                 playlistEnabled = Json.optionalBool(values, "playlistEnabled"),
                 playlistUrl = Json.optionalString(values, "playlistUrl", UrlValidator.MAX_LENGTH),
                 playlistRefreshSec = Json.optionalInt(values, "playlistRefreshSec"),
+                mediaWebUrl = Json.optionalString(values, "mediaWebUrl", UrlValidator.MAX_LENGTH),
+                mediaWebEnabled = Json.optionalBool(values, "mediaWebEnabled"),
+                mediaSourceDefault = Json.optionalString(values, "mediaSourceDefault", MAX_ENUM_WIRE),
                 imageDurationSec = Json.optionalInt(values, "imageDurationSec"),
                 volumePercent = Json.optionalInt(values, "volumePercent"),
                 mediaFillMode = Json.optionalString(values, "mediaFillMode", MAX_ENUM_WIRE),
@@ -637,7 +641,9 @@ class ApiRoutes(
     /** Plays an ad-hoc URL now; the same `UrlValidator` as `/api/nav/open`. */
     private fun mediaOpen(values: Map<String, Json.Value>): Response {
         val url = Json.requireString(values, "url", UrlValidator.MAX_LENGTH)
-        return respond(host.openMediaUrl(url))
+        // Omitted means today's behaviour: the native player.
+        val web = Json.optionalBool(values, "web") ?: false
+        return respond(host.openMediaUrl(url, web))
     }
 
     /**
@@ -674,6 +680,14 @@ class ApiRoutes(
             "playlistEnabled" to settings.playlistEnabled,
             "playlistUrl" to settings.playlistUrl,
             "playlistRefreshSec" to settings.playlistRefreshSec,
+            // Masked like every other published URL, and never the stored
+            // value itself: this is the convention `/api/settings/mqtt` follows
+            // for `mqttPassword` (`mqttPasswordSet`, never the password). A
+            // Jellyfin URL may carry a session token in its query.
+            "mediaWebUrl" to MediaUrl.forPublish(settings.mediaWebUrl),
+            "mediaWebUrlSet" to settings.mediaWebUrl.isNotEmpty(),
+            "mediaWebEnabled" to settings.mediaWebEnabled,
+            "mediaSourceDefault" to settings.mediaSourceDefault.wire,
             "imageDurationSec" to settings.imageDurationSec,
             "volumePercent" to settings.volumePercent,
             "mediaFillMode" to settings.mediaFillMode.wire,
@@ -1092,7 +1106,8 @@ class ApiRoutes(
             "currentNumberPx", "historyNumberPx", "labelPx", "currentCardPx",
             "historyCardMinPx", "historyCardMaxPx", "uiLanguage", "mediaLocalEnabled",
             "playlistEnabled", "playlistUrl", "playlistRefreshSec", "imageDurationSec",
-            "volumePercent", "mediaFillMode", "newCallHighlight", "uiScale"
+            "volumePercent", "mediaFillMode", "newCallHighlight", "uiScale",
+            "mediaWebUrl", "mediaWebEnabled", "mediaSourceDefault"
         )
     }
 }

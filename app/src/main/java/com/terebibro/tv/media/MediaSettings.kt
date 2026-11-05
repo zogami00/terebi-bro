@@ -35,6 +35,21 @@ enum class MediaFillMode(val wire: String) {
 }
 
 /**
+ * Which source the media band selects at startup. `LOCAL` is the automatic
+ * default (the local folder, with a configured HTTP playlist still winning, as
+ * before); `PLAYLIST` prefers the playlist; `WEB` opens [MediaSettings.mediaWebUrl].
+ */
+enum class MediaSourceDefault(val wire: String) {
+    LOCAL("local"),
+    PLAYLIST("playlist"),
+    WEB("web");
+
+    companion object {
+        fun fromWire(value: String): MediaSourceDefault? = entries.firstOrNull { it.wire == value }
+    }
+}
+
+/**
  * Immutable, effective media-mode configuration. Pure-JVM (no Android types),
  * so the validator/merge logic can be unit-tested and never depends on
  * `ConfigStore`.
@@ -65,6 +80,12 @@ data class MediaSettings(
     val playlistEnabled: Boolean = false,
     val playlistUrl: String = "",
     val playlistRefreshSec: Int = 300,
+    /** The web page the media band can show. Stored in full (it may carry a token). */
+    val mediaWebUrl: String = "",
+    /** Open [mediaWebUrl] on startup instead of the folder/playlist. */
+    val mediaWebEnabled: Boolean = false,
+    /** Which source the controller selects at startup. */
+    val mediaSourceDefault: MediaSourceDefault = MediaSourceDefault.LOCAL,
     val imageDurationSec: Int = 10,
     val volumePercent: Int = 100,
     val mediaFillMode: MediaFillMode = MediaFillMode.LETTERBOX_BLUR,

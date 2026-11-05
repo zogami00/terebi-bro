@@ -95,6 +95,28 @@ class MediaPlaylistTest {
     }
 
     @Test
+    fun `a web entry is skipped because the playlist stays a file loop`() {
+        // Web is a single deliberate source, never a queue item: the parser
+        // drops it exactly like an unknown type.
+        val items = valid(
+            list(
+                entry(type = "web", url = "https://jellyfin.example.com/web"),
+                entry(url = "https://cdn.example.com/kept.mp4")
+            )
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(MediaItem.Kind.VIDEO, items[0].kind)
+        assertEquals("https://cdn.example.com/kept.mp4", items[0].id)
+
+        // A playlist of only web entries has nothing playable.
+        assertEquals(
+            "no_valid_items",
+            invalid(list(entry(type = "web", url = "https://jellyfin.example.com/web")))
+        )
+    }
+
+    @Test
     fun `a rejected scheme rejects the entry, not the playlist`() {
         val items = valid(
             list(

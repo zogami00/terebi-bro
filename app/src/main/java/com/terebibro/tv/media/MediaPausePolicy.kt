@@ -8,8 +8,9 @@ package com.terebibro.tv.media
  * when any independent pause source is active — an overlay above the band, the
  * activity lifecycle, the operator's own Play/Pause hold or a lost audio focus.
  *
- * This is the only pause predicate: the published state, the player effect and
- * the focus-gain re-assertion all read it, so the sources can never disagree.
+ * This is the only pause predicate: the published state, the player effect, the
+ * media band's web page and the focus-gain re-assertion all read it, so the
+ * sources can never disagree.
  */
 object MediaPausePolicy {
 

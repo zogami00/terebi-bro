@@ -24,7 +24,10 @@ object MediaFileRules {
 
     /** The permitted shape: an ASCII stem of at most 64 chars, then a known extension. */
     private val NAME_REGEX =
-        Regex("^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\\.(mp4|jpg|jpeg|png)$", RegexOption.IGNORE_CASE)
+        Regex(
+            "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}\\.(mp4|m4v|mov|mkv|webm|jpg|jpeg|png)$",
+            RegexOption.IGNORE_CASE
+        )
 
     /** Windows reserved device names, refused so the folder stays portable. */
     private val RESERVED: Set<String> = buildSet {
@@ -79,44 +82,73 @@ object MediaFileRules {
         return name
     }
 
+    /** The container families the content gate distinguishes. */
+    enum class Container { MP4, EBML, JPEG, PNG }
+
     /**
-     * Sniffs the container from the first bytes of the body: MP4 (`ftyp` at
-     * offset 4), JPEG (`FF D8 FF`) or PNG (`89 50 4E 47`). Anything else —
-     * including a truncated prefix — is null.
+     * Sniffs the container from the first bytes of the body: MP4-family
+     * (`ftyp` at offset 4), Matroska/WebM (the EBML header `1A 45 DF A3`), JPEG
+     * (`FF D8 FF`) or PNG (`89 50 4E 47`). Anything else — including a
+     * truncated prefix — is null.
      */
-    fun kindOf(magic: ByteArray): MediaItem.Kind? {
+    fun containerOf(magic: ByteArray): Container? {
         if (magic.size >= 8 &&
             magic[4] == 'f'.code.toByte() &&
             magic[5] == 't'.code.toByte() &&
             magic[6] == 'y'.code.toByte() &&
             magic[7] == 'p'.code.toByte()
         ) {
-            return MediaItem.Kind.VIDEO
+            return Container.MP4
+        }
+        if (magic.size >= 4 && u(magic[0]) == 0x1A && u(magic[1]) == 0x45 &&
+            u(magic[2]) == 0xDF && u(magic[3]) == 0xA3
+        ) {
+            // EBML is shared by Matroska and WebM; the platform treats both as
+            // video containers.
+            return Container.EBML
         }
         if (magic.size >= 3 && u(magic[0]) == 0xFF && u(magic[1]) == 0xD8 && u(magic[2]) == 0xFF) {
-            return MediaItem.Kind.IMAGE
+            return Container.JPEG
         }
         if (magic.size >= 4 && u(magic[0]) == 0x89 && u(magic[1]) == 0x50 &&
             u(magic[2]) == 0x4E && u(magic[3]) == 0x47
         ) {
-            return MediaItem.Kind.IMAGE
+            return Container.PNG
         }
         return null
     }
 
+    /** The playable kind a sniffed container maps to. */
+    fun kindOf(magic: ByteArray): MediaItem.Kind? = when (containerOf(magic)) {
+        Container.MP4, Container.EBML -> MediaItem.Kind.VIDEO
+        Container.JPEG, Container.PNG -> MediaItem.Kind.IMAGE
+        null -> null
+    }
+
     /**
-     * The upload content gate: the container sniffed from [magic] must be a
-     * known kind and must agree with the extension of [name]. A JPEG renamed
-     * `.mp4` is refused here, before the file can enter the library.
+     * The upload content gate: the container sniffed from [magic] must agree
+     * with the extension of [name]. A JPEG renamed `.mp4` is refused, and so is
+     * an MP4 renamed `.mkv`: matching only the playable *kind* would let the
+     * latter through, so the container family is compared instead.
      */
     fun contentMatchesExtension(name: String, magic: ByteArray): Boolean {
-        val sniffed = kindOf(magic) ?: return false
-        return MediaFileKinds.of(name) == sniffed
+        val container = containerOf(magic) ?: return false
+        val expected = when (name.substringAfterLast('.', "").lowercase()) {
+            "mp4", "m4v", "mov" -> Container.MP4
+            "mkv", "webm" -> Container.EBML
+            "jpg", "jpeg" -> Container.JPEG
+            "png" -> Container.PNG
+            else -> return false
+        }
+        return container == expected
     }
 
     /** The MIME type for a validated library name, or null for an unknown extension. */
     fun contentTypeOf(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
-        "mp4" -> "video/mp4"
+        "mp4", "m4v" -> "video/mp4"
+        "mov" -> "video/quicktime"
+        "mkv" -> "video/x-matroska"
+        "webm" -> "video/webm"
         "jpg", "jpeg" -> "image/jpeg"
         "png" -> "image/png"
         else -> null

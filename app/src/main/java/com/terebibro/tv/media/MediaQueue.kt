@@ -8,6 +8,11 @@ package com.terebibro.tv.media
  * (`true`). Playlist entries and ad-hoc URLs are remote; library files are not.
  * The distinction matters to [MediaPlayerHost], which must never look for a
  * remote id on disk.
+ *
+ * [Kind.WEB] is the media WebView: its [id] is the page URL and it is always
+ * [remote]. It is never a queue item (the playlist parser refuses `web`
+ * entries), so only the controller synthesises one, and the native player never
+ * receives it.
  */
 data class MediaItem(
     val id: String,
@@ -16,7 +21,7 @@ data class MediaItem(
     val durationMs: Long,
     val remote: Boolean = false
 ) {
-    enum class Kind { VIDEO, IMAGE }
+    enum class Kind { VIDEO, IMAGE, WEB }
 }
 
 /** Queue arithmetic only; the queue itself is owned by the media layer. */
