@@ -1151,6 +1151,17 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         mediaContainer.layoutParams = mediaParams
         webViewContainer.layoutParams = webParams
 
+        // A page in MEDIA_ONLY owns the D-pad itself. The container is
+        // focusable so a native item has somewhere to land, but while the page
+        // is showing it must not compete: a focused container would take the
+        // key and the guard no longer swallows it. Restore the container as
+        // soon as the page stops being the band's source.
+        val mediaPageActive = mode == MediaMode.MEDIA_ONLY && mediaController.isWebSource()
+        mediaContainer.isFocusable = !mediaPageActive
+        if (mediaPageActive && mediaFullscreenView == null && mediaContainer.hasFocus()) {
+            mediaController.refocusWeb()
+        }
+
         // Focus follows the visible surface. Leaving the workspace hides the
         // media band, and the D-pad must go back to the QMS page rather than to
         // a gone view; entering it puts focus on the band (the page itself when
@@ -1285,7 +1296,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun handleMediaKey(event: KeyEvent): Boolean {
         val key = mediaKeyFor(event.keyCode)
         val mode = mediaController.currentMode()
-        if (!MediaKeyGuard.shouldSwallow(mode, anyOverlayVisible(), key)) return false
+        if (!MediaKeyGuard.shouldSwallow(
+                mode,
+                anyOverlayVisible(),
+                mediaController.isWebSource(),
+                key
+            )
+        ) {
+            return false
+        }
         // Act once, on the release; the press itself is still consumed.
         if (event.action != KeyEvent.ACTION_UP) return true
         when (key) {
@@ -1294,7 +1313,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             MediaKey.PAUSE -> mediaController.pause()
             MediaKey.NEXT -> mediaController.next()
             MediaKey.PREVIOUS -> mediaController.previous()
-            // The WebView is hidden, so the press has nowhere else to go.
+            // Only a native band item reaches here (the guard never swallows a
+            // D-pad key while a web page is active), and it has nothing to
+            // navigate.
             MediaKey.DPAD, MediaKey.ENTER -> Unit
             MediaKey.MENU, MediaKey.OTHER -> return false
         }
@@ -1336,6 +1357,29 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             infoOverlay.visibility == View.VISIBLE ||
             errorOverlay.visibility == View.VISIBLE ||
             deviceOverlay.visibility == View.VISIBLE
+
+    /**
+     * Whether the media band's web page owns the remote in `MEDIA_ONLY`. A
+     * page-owned fullscreen view is not the page itself: it sits above the
+     * hidden WebView and must keep the keys while it is up.
+     */
+    private fun mediaPageOwnsKeys(): Boolean =
+        config.mediaSettings.enabled &&
+            mediaController.currentMode() == MediaMode.MEDIA_ONLY &&
+            mediaController.isWebSource() &&
+            mediaFullscreenView == null
+
+    /**
+     * Keeps the media page as the focused view before an unswallowed key is
+     * dispatched. The guard no longer consumes D-pad/ENTER for a page in
+     * `MEDIA_ONLY`, so the key has to land on the WebView itself rather than on
+     * the band container (or a stale focused view).
+     */
+    private fun ensureMediaPageFocus() {
+        if (!::mediaWebSurface.isInitialized) return
+        if (!mediaPageOwnsKeys() || anyOverlayVisible()) return
+        if (!mediaWebSurface.hasPageFocus()) mediaController.refocusWeb()
+    }
 
     /** The four overlays (and dialogs) are independent; derive one pause bit from them. */
     private fun syncMediaOverlay() {
@@ -1387,6 +1431,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 else -> return true
             }
         }
+        ensureMediaPageFocus()
         return super.dispatchKeyEvent(event)
     }
 
