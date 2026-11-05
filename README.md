@@ -87,13 +87,14 @@ whitelisting a newer provider.
 
 > **<https://github.com/zogami00/terebi-bro/releases/latest>**
 
-The asset is named **`app-release.apk`**.
+The asset is versioned, named **`terebi-bro-v<version>.apk`** — for example
+**`terebi-bro-v0.5.0.apk`** — so a downloaded copy stays identifiable.
 
 Install or upgrade it from a machine with `adb`, on the same network and with the
 TV reachable over ADB:
 
 ```powershell
-adb install -r app-release.apk
+adb install -r terebi-bro-v0.5.0.apk
 ```
 
 The release APK is signed with a **dedicated release key**, which is different
