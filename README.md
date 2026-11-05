@@ -287,6 +287,12 @@ call observed the strip keeps showing what it last showed, or the no-call label.
 best-effort on a WebView too old for document-start scripts, and a `<video>`
 used as a sound source is indistinguishable from programme audio.
 
+The QMS URL and the four detection selectors are set in the controller's Media
+card, under **Queue board**, and default to the reference dashboard's structure
+(see the settings table below). A blank QMS URL tracks the Home URL. Enabling
+media mode, or saving the settings, on a page that is already loaded reads that
+page immediately — a reload is not needed.
+
 ### Where media lives
 
 Local files live in the app-private external folder:

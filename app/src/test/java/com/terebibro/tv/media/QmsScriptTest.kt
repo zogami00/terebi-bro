@@ -93,6 +93,29 @@ class QmsScriptTest {
     }
 
     @Test
+    fun `the installed script exposes a re-probe hook`() {
+        assertTrue(script.contains("window.__terebiQmsProbe = forceProbe;"))
+        // The hook lives inside the origin-guarded install block: a page the
+        // script never installed on cannot be probed.
+        val install = script.indexOf("window.__terebiQmsInstalled = true")
+        assertTrue(script.indexOf("window.__terebiQmsProbe = forceProbe") > install)
+        // A second evaluation of the whole script exits on the guard first, so
+        // re-running it cannot duplicate the hook, the observer or the timer.
+        assertTrue(script.indexOf("window.__terebiQmsInstalled === true") < install)
+    }
+
+    @Test
+    fun `probeCall re-probes only an installed script and is otherwise a no-op`() {
+        val call = QmsScript.probeCall()
+        assertTrue(call.contains("typeof window.__terebiQmsProbe === \"function\""))
+        assertTrue(call.contains("window.__terebiQmsProbe();"))
+        // Self-contained and inert: no markup and no origin assumption, so it
+        // is safe to evaluate on any page the operator navigated to.
+        assertFalse(call.contains("<"))
+        assertFalse(call.contains("location.origin"))
+    }
+
+    @Test
     fun `a hostile selector cannot break out of its literal`() {
         val hostile = settings.copy(qmsStripSelector = "main > div[data-x=\"a\\b\"]</script>")
         val built = QmsScript.build(hostile, origin)

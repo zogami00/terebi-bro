@@ -186,6 +186,11 @@ object QmsScript {
                 checkProbe();
                 post("ready", "1");
 
+                // A settings save re-probes the page that is already on
+                // screen instead of waiting for a reload; see [probeCall].
+                // Only a document that installed the script exposes it.
+                window.__terebiQmsProbe = forceProbe;
+
                 // The interval is not a fallback in name only: the reference
                 // device runs Chromium 66, where the observer can miss a
                 // wholesale list replacement. It also re-attaches the observer
@@ -197,6 +202,25 @@ object QmsScript {
             })();
         """.trimIndent()
     }
+
+    /**
+     * A one-shot re-probe of the script that is already installed in the page.
+     *
+     * A settings save can happen while the board is on screen; without this the
+     * page would only be read again on its next mutation or navigation. The
+     * snippet is a no-op on any document where the script is not installed
+     * (its `window.__terebiQmsProbe` hook only exists inside the installed and
+     * origin-checked block), so it is safe to evaluate unconditionally.
+     */
+    fun probeCall(): String = """
+        (function () {
+          try {
+            if (typeof window.__terebiQmsProbe === "function") {
+              window.__terebiQmsProbe();
+            }
+          } catch (e) {}
+        })();
+    """.trimIndent()
 
     /**
      * A JavaScript string literal. Escapes quotes, backslashes, line breaks and

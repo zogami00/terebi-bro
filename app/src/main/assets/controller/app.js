@@ -537,6 +537,12 @@
     mediaFillMode: 'mediaFillModeInput',
     uiLanguage: 'mediaLanguageInput',
     uiScale: 'mediaUiScaleInput',
+    qmsUrl: 'mediaQmsUrlInput',
+    qmsStripSelector: 'mediaStripSelectorInput',
+    qmsNumberSelector: 'mediaNumberSelectorInput',
+    qmsLocationSelector: 'mediaLocationSelectorInput',
+    qmsTimeSelector: 'mediaTimeSelectorInput',
+    callSource: 'mediaCallSourceInput',
     playlistUrl: 'playlistUrlInput',
     playlistRefreshSec: 'playlistRefreshInput'
   };
@@ -581,6 +587,12 @@
       setSelectIfIdle('mediaFillModeInput', d.mediaFillMode);
       setSelectIfIdle('mediaLanguageInput', d.uiLanguage);
       setValueIfIdle('mediaUiScaleInput', d.uiScale);
+      setValueIfIdle('mediaQmsUrlInput', d.qmsUrl);
+      setValueIfIdle('mediaStripSelectorInput', d.qmsStripSelector);
+      setValueIfIdle('mediaNumberSelectorInput', d.qmsNumberSelector);
+      setValueIfIdle('mediaLocationSelectorInput', d.qmsLocationSelector);
+      setValueIfIdle('mediaTimeSelectorInput', d.qmsTimeSelector);
+      setSelectIfIdle('mediaCallSourceInput', d.callSource);
       setCheckIfIdle('playlistEnabledToggle', d.playlistEnabled);
       setValueIfIdle('playlistUrlInput', d.playlistUrl);
       setValueIfIdle('playlistRefreshInput', d.playlistRefreshSec);
@@ -637,6 +649,16 @@
     putNumber(body, 'uiScale', 'mediaUiScaleInput');
     putString(body, 'mediaFillMode', 'mediaFillModeInput');
     putString(body, 'uiLanguage', 'mediaLanguageInput');
+    // Selectors are omitted when blank: the server keeps the previous value,
+    // and a blank selector is a named 400 rather than a silent reset.
+    putString(body, 'qmsStripSelector', 'mediaStripSelectorInput');
+    putString(body, 'qmsNumberSelector', 'mediaNumberSelectorInput');
+    putString(body, 'qmsLocationSelector', 'mediaLocationSelectorInput');
+    putString(body, 'qmsTimeSelector', 'mediaTimeSelectorInput');
+    putString(body, 'callSource', 'mediaCallSourceInput');
+    // The QMS URL is always sent, even empty: that is the documented way to
+    // clear a stale URL back to "track the Home URL", exactly like playlistUrl.
+    body.qmsUrl = $('mediaQmsUrlInput').value.trim();
     // The playlist URL is always sent, not omitted when empty: that is the
     // documented way to clear a stale URL, and enabling the playlist without
     // one is a named 400 rather than a silent no-op.

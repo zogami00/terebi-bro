@@ -81,6 +81,15 @@ class WebViewController(
     private var title = ""
 
     /**
+     * True while the document on screen is a committed, finished load. The
+     * fallback injection may only run against an existing document: an
+     * evaluation issued into a navigation in flight is lost with the document
+     * being replaced. Cleared when a navigation starts and on a main-frame
+     * error, set when the load finishes.
+     */
+    private var pageLoaded = false
+
+    /**
      * Set when [goHome] loads the home URL; the history is collapsed in
      * [TerebiWebViewClient.onPageFinished]. Clearing right after `loadUrl`
      * leaves the entry being loaded behind, so it must wait until the page has
@@ -276,13 +285,12 @@ class WebViewController(
                     applyQmsBridge(view)
                 }
                 applyQmsScriptTo(view)
-                // Enabling media mode while the QMS page is already open must
-                // start detection now; a document-start rule only applies to
-                // the next document. The script's own guard keeps this
-                // idempotent and its origin gate keeps other pages out.
-                if (script.isNotEmpty() && origin.isNotEmpty()) {
-                    view.evaluateJavascript(script, null)
-                }
+                // Enabling media mode (or changing the script) while the QMS
+                // page is already open must start detection now; a
+                // document-start rule only applies to the next document.
+                // Nothing happens while the page is still loading — the
+                // page-load fallback owns that case.
+                evaluateQmsOnLoadedPage(view)
             }
             true
         }
@@ -329,6 +337,30 @@ class WebViewController(
             }
         }
     }
+
+    /**
+     * Runs the script once against the document that is already on screen.
+     *
+     * This is the missing half of the Chromium 66 fallback: there the script
+     * is only injected from `onPageStarted`/`onPageFinished`, so enabling
+     * media mode on an already-loaded page would otherwise wait for the next
+     * navigation. Three conditions keep it harmless:
+     *
+     * - an installed document-start handler already ran at document start, so
+     *   the document-start path does nothing extra here;
+     * - a page still loading is left to the page-load fallback;
+     * - the script's own `__terebiQmsInstalled` guard makes a second
+     *   evaluation a no-op, and its origin gate keeps other pages out.
+     */
+    private fun evaluateQmsOnLoadedPage(view: WebView) {
+        if (qmsScript.isEmpty() || qmsOrigin.isEmpty()) return
+        if (qmsHandler != null) return
+        if (!pageLoaded) return
+        view.evaluateJavascript(qmsScript, null)
+    }
+
+    /** Whether the current document has finished loading. Must run on the UI thread. */
+    fun isPageLoaded(): Boolean = pageLoaded
 
     private fun removeQmsHandler() {
         try {
@@ -432,6 +464,7 @@ class WebViewController(
         webView = replacement
         // A new WebView has neither the JavaScript interface nor the
         // document-start handler; both are re-applied before the first load.
+        pageLoaded = false
         applyQmsBridge(replacement)
         applyQmsScriptTo(replacement)
         target.addView(
@@ -471,6 +504,7 @@ class WebViewController(
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
             loading = true
             progress = 0
+            pageLoaded = false
             injectQmsFallback(view)
             listener.onWebPageStarted(url)
             listener.onWebStateChanged()
@@ -479,6 +513,7 @@ class WebViewController(
         override fun onPageFinished(view: WebView, url: String?) {
             loading = false
             progress = 100
+            pageLoaded = true
             title = view.title ?: ""
             // Collapse the back/forward list after a goHome load so home is the
             // only entry (see pendingClearHistory). Done here, not in goHome:
@@ -504,6 +539,7 @@ class WebViewController(
             if (!request.isForMainFrame) return
             val description = error.description?.toString() ?: "error"
             loading = false
+            pageLoaded = false
             listener.onWebPageError(description)
             listener.onWebStateChanged()
         }

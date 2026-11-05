@@ -1575,9 +1575,28 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // qmsUrl, a selector or the master switch changing rebuilds the
         // injected script; the signature check makes a no-op edit cheap.
         applyQmsScriptOnMain()
+        // A settings save must be visible on the board that is already on
+        // screen, not on the next navigation: re-read it once. A passing probe
+        // re-applies the strip (MediaController.onQmsProbe), and a failed one
+        // still publishes the unavailable state.
+        reprobeQmsOnLoadedPage()
         applyMediaLayoutOnMain()
         seq.incrementAndGet()
         broadcastState()
+    }
+
+    /**
+     * Re-probes the page that is already showing when a settings save lands.
+     * Only the two QMS-owning modes have a board to read: `QMS_ONLY` is where
+     * the boot rule waits for the first match, and `SPLIT` is the strip.
+     * `QMS_FOCUS` is a live call and `MEDIA_ONLY` has no strip on screen, so
+     * neither is disturbed.
+     */
+    private fun reprobeQmsOnLoadedPage() {
+        val mode = mediaController.currentMode()
+        if (mode != MediaMode.SPLIT && mode != MediaMode.QMS_ONLY) return
+        if (!webViewController.isPageLoaded()) return
+        webViewController.evaluateQms(QmsScript.probeCall())
     }
 
     /**

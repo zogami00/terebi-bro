@@ -214,6 +214,40 @@
     <label for="mediaUiScaleInput">Vendor page scale %</label>
     <input id="mediaUiScaleInput" type="number" min="80" max="200" autocomplete="off">
 
+    <p class="muted">Queue board</p>
+
+    <label for="mediaQmsUrlInput">QMS URL</label>
+    <input id="mediaQmsUrlInput" type="text" inputmode="url" autocomplete="off"
+           placeholder="https://example.com/board">
+    <p class="muted">Blank uses the Home URL</p>
+
+    <label for="mediaStripSelectorInput">List container selector</label>
+    <input id="mediaStripSelectorInput" type="text" autocomplete="off"
+           placeholder="main &gt; div:nth-child(1)">
+    <p class="muted">the column that holds the call cards</p>
+
+    <label for="mediaNumberSelectorInput">Number selector</label>
+    <input id="mediaNumberSelectorInput" type="text" autocomplete="off"
+           placeholder="div:first-child &gt; span">
+    <p class="muted">relative to a call card</p>
+
+    <label for="mediaLocationSelectorInput">Location selector</label>
+    <input id="mediaLocationSelectorInput" type="text" autocomplete="off"
+           placeholder="div:nth-child(2) &gt; span:first-child">
+    <p class="muted">relative to a call card</p>
+
+    <label for="mediaTimeSelectorInput">Time selector</label>
+    <input id="mediaTimeSelectorInput" type="text" autocomplete="off"
+           placeholder="div:nth-child(2) &gt; span:nth-child(2)">
+    <p class="muted">relative to a call card</p>
+
+    <label for="mediaCallSourceInput">Call source</label>
+    <select id="mediaCallSourceInput">
+      <option value="dom">DOM only</option>
+      <option value="dom_or_audio">DOM or chime</option>
+      <option value="audio">Chime only</option>
+    </select>
+
     <p class="warn">The HTTP playlist replaces the local folder while it has at
     least one valid entry. A bad entry is skipped; an unreachable or invalid
     playlist falls back to the folder, so the screen is never left blank. The
