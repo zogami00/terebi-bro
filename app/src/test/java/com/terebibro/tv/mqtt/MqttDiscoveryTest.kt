@@ -40,6 +40,18 @@ class MqttDiscoveryTest {
             "homeassistant/text/terebibro_living-room-tv/open_url/config",
             MqttDiscovery.topic(prefix, deviceId, entity("open_url"))
         )
+        assertEquals(
+            "homeassistant/button/terebibro_living-room-tv/media_next/config",
+            MqttDiscovery.topic(prefix, deviceId, entity("media_next"))
+        )
+        assertEquals(
+            "homeassistant/sensor/terebibro_living-room-tv/media_mode/config",
+            MqttDiscovery.topic(prefix, deviceId, entity("media_mode"))
+        )
+        assertEquals(
+            "homeassistant/sensor/terebibro_living-room-tv/qms_now/config",
+            MqttDiscovery.topic(prefix, deviceId, entity("qms_now"))
+        )
     }
 
     @Test
@@ -248,6 +260,27 @@ class MqttDiscoveryTest {
     }
 
     @Test
+    fun `the media sensors read the status JSON with the required templates`() {
+        val status = "$base/status"
+
+        val mode = entity("media_mode")
+        assertEquals(MqttDiscovery.Component.SENSOR, mode.component)
+        assertEquals(status, mode.config.getString("state_topic"))
+        assertEquals("{{ value_json.mediaMode }}", mode.config.getString("value_template"))
+        assertEquals("Mode", mode.config.getString("name"))
+        assertFalse(mode.config.has("entity_category"))
+
+        val nowServing = entity("qms_now")
+        assertEquals(MqttDiscovery.Component.SENSOR, nowServing.component)
+        assertEquals(status, nowServing.config.getString("state_topic"))
+        assertEquals(
+            "{{ value_json.qmsNow | truncate(250, true) }}",
+            nowServing.config.getString("value_template")
+        )
+        assertEquals("Now serving", nowServing.config.getString("name"))
+    }
+
+    @Test
     fun `the diagnostic sensors are marked diagnostic`() {
         for (objectId in listOf(
             "webview_version", "app_version", "ip_address", "port", "network", "android_version"
@@ -348,7 +381,10 @@ class MqttDiscoveryTest {
             "forward" to MqttAction.FORWARD,
             "stop" to MqttAction.STOP,
             "clear_cache" to MqttAction.CLEAR_CACHE,
-            "clear_site_data" to MqttAction.CLEAR_SITE_DATA
+            "clear_site_data" to MqttAction.CLEAR_SITE_DATA,
+            "media_next" to MqttAction.MEDIA_NEXT,
+            "media_play" to MqttAction.MEDIA_PLAY,
+            "media_pause" to MqttAction.MEDIA_PAUSE
         )
         for ((objectId, action) in expected) {
             val payload = entity(objectId).config.getString("payload_press")

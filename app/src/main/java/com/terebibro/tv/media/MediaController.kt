@@ -192,8 +192,9 @@ class MediaController(
 
     /**
      * The bridge's only entry point (already hopped to the main thread by
-     * `QmsBridge`). Unknown kinds and clamped repeats are dropped here; M2
-     * consumes `now`, `probe` and `ready` and ignores `audio`/`visibility`.
+     * `QmsBridge`). Unknown kinds and clamped repeats are dropped here; `now`,
+     * `probe`, `ready` and the optional `audio` chime are consumed, and
+     * `visibility` is accepted but unused.
      */
     fun onQmsSignal(kindWire: String, value: String?) {
         val kind = QmsSignalKind.fromWire(kindWire) ?: return
@@ -206,10 +207,24 @@ class MediaController(
             // board is simply awaiting the first call of the day.
             QmsSignalKind.PROBE -> onQmsProbe(clean == "ok" || clean == "empty")
             QmsSignalKind.READY -> Unit
-            // The chime and the Page Visibility hook are M4; accepting them
-            // now would only publish state nothing acts on.
-            QmsSignalKind.AUDIO, QmsSignalKind.VISIBILITY -> Unit
+            // The chime is the optional second signal. It never carries a
+            // number; see [onQmsAudio]. Page Visibility remains unused.
+            QmsSignalKind.AUDIO -> onQmsAudio()
+            QmsSignalKind.VISIBILITY -> Unit
         }
+    }
+
+    /**
+     * An accepted chime signal. With `callSource = dom` it is ignored; with
+     * `dom_or_audio` or `audio` it re-arms the dwell and takes the screen
+     * exactly like a DOM call, except that it never invents a call number.
+     * The strip keeps whatever the DOM last reported — a chime-only trigger
+     * moves the screen, not the text.
+     */
+    private fun onQmsAudio() {
+        if (!MediaStateMachine.audioTriggersCall(cfg, System.currentTimeMillis(), qmsLastCallAtMs)) return
+        dispatch(MediaEvent.Call(true))
+        onChanged()
     }
 
     /** Every page load re-applies the strip while it is on screen. */
@@ -264,7 +279,11 @@ class MediaController(
             if (state.mode == before && state.mode == MediaMode.SPLIT) applyStrip()
         }
 
-        if (newCall) {
+        // With `callSource = audio` the DOM is text-only: it updates
+        // qmsNow/qmsLocation unconditionally, but only the chime may take the
+        // screen. `qmsLastCallAtMs` is left alone too, so the chime that
+        // accompanies this DOM change is not mistaken for a duplicate.
+        if (newCall && MediaStateMachine.domTriggersCall(cfg.callSource)) {
             qmsLastCallAtMs = System.currentTimeMillis()
             dispatch(MediaEvent.Call(true))
         }
@@ -391,6 +410,17 @@ class MediaController(
         } else {
             reloadQueue(reset = false, advanceOnMissing = true)
         }
+    }
+
+    /**
+     * The app returned to the foreground. The media folder is re-read on the
+     * shared IO executor, so an `adb push` while the app is open appears
+     * without a settings change. The playing item is kept when it still
+     * exists; with media mode off there is no folder to rescan.
+     */
+    fun onResumeRescan() {
+        if (!state.enabled) return
+        reloadQueue(reset = false, advanceOnMissing = true)
     }
 
     fun overlay(visible: Boolean) {

@@ -69,6 +69,16 @@ interface ControllerHost {
     fun openMediaUrl(url: String): ApiResult
 
     /**
+     * Queue/playback control used by the MQTT actions. Each is a no-op with a
+     * clear result when media mode is off.
+     */
+    fun mediaNext(): ApiResult
+
+    fun mediaPlay(): ApiResult
+
+    fun mediaPause(): ApiResult
+
+    /**
      * Called after a library upload or delete succeeded, so the media layer
      * re-reads the folder. Playback keeps the current item when it still
      * exists; an unrelated change never restarts it.

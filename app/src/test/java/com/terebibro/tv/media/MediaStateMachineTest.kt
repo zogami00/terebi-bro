@@ -561,4 +561,70 @@ class MediaStateMachineTest {
         assertEquals(0, empty.count)
         assertEquals(0, empty.index)
     }
+
+    // ------------------------------------------------------------ audio chime
+
+    @Test
+    fun `an audio signal counts as a call only when the call source opts in`() {
+        assertEquals(
+            mapOf(
+                CallSource.DOM to false,
+                CallSource.DOM_OR_AUDIO to true,
+                CallSource.AUDIO to true
+            ),
+            CallSource.entries.associateWith { MediaStateMachine.audioCountsAsCall(it) }
+        )
+    }
+
+    @Test
+    fun `a dom change triggers a call unless the call source is audio only`() {
+        assertEquals(
+            mapOf(
+                CallSource.DOM to true,
+                CallSource.DOM_OR_AUDIO to true,
+                CallSource.AUDIO to false
+            ),
+            CallSource.entries.associateWith { MediaStateMachine.domTriggersCall(it) }
+        )
+    }
+
+    @Test
+    fun `an audio signal within a second of a dom call is a duplicate`() {
+        val lastDom = 10_000L
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom, lastDom))
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom + 999L, lastDom))
+        // At exactly 1 s it is a separate signal, not a duplicate.
+        assertFalse(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom + 1000L, lastDom))
+        // No DOM call yet means nothing to duplicate.
+        assertFalse(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom, 0L))
+        // A backwards clock is treated as a duplicate, never as a fresh call.
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom - 1L, lastDom))
+    }
+
+    @Test
+    fun `the chime predicate combines the source and the dom debounce`() {
+        val audioOnly = cfg.copy(callSource = CallSource.AUDIO)
+        val domOrAudio = cfg.copy(callSource = CallSource.DOM_OR_AUDIO)
+        val domOnly = cfg.copy(callSource = CallSource.DOM)
+
+        // No DOM call has ever been observed: audio still moves the screen.
+        assertTrue(MediaStateMachine.audioTriggersCall(audioOnly, 5_000L, 0L))
+        assertTrue(MediaStateMachine.audioTriggersCall(domOrAudio, 5_000L, 0L))
+        // With callSource = dom the chime is ignored entirely.
+        assertFalse(MediaStateMachine.audioTriggersCall(domOnly, 5_000L, 0L))
+        // A chime right behind a DOM call does not double-arm the dwell.
+        assertFalse(MediaStateMachine.audioTriggersCall(domOrAudio, 5_500L, 5_000L))
+        assertTrue(MediaStateMachine.audioTriggersCall(domOrAudio, 6_500L, 5_000L))
+    }
+
+    @Test
+    fun `a chime call re-arms the dwell exactly like a dom call`() {
+        // The controller turns an accepted chime into the same Call event, so
+        // the reducer's semantics are identical; this pins the re-arm.
+        val first = reduce(split(), MediaEvent.Call(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_FOCUS, first.mode)
+        val second = reduce(first, MediaEvent.Call(true), nowMs = 3_000L)
+        assertEquals(MediaMode.QMS_FOCUS, second.mode)
+        assertTrue(second.dwellUntilMs > first.dwellUntilMs)
+    }
 }

@@ -8,7 +8,9 @@ import org.eclipse.paho.client.mqttv3.MqttCallback
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions
 import org.eclipse.paho.client.mqttv3.MqttException
+import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.MqttToken
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -69,36 +71,37 @@ class MqttManagerPublishTest {
 
     @Test
     fun `discovery attempts every entity and keeps publishing after an in-flight failure`() {
-        // The 10th QoS-1 publish fails: availability is #1, so entities 1..8
-        // (publish #2..#9) succeed and the 9th entity (publish #10) throws —
-        // exactly the `android_version` failure seen in the field. Later
-        // publishes succeed because the failure is transient and the window is
-        // no longer blocked by the publish burst running on the callback thread.
+        // The 12th QoS-1 publish fails: availability is #1 and every sensor
+        // through `network` succeeds (#2..#11), so the 11th entity
+        // (`android_version`, publish #12) throws — exactly the failure seen in
+        // the field. Later publishes succeed because the failure is transient
+        // and the window is no longer blocked by the publish burst running on
+        // the callback thread.
         val fake = FakeClient(failPublish = { attempt, _ ->
-            if (attempt == 10) MqttException(MqttException.REASON_CODE_MAX_INFLIGHT.toInt()) else null
+            if (attempt == 12) MqttException(MqttException.REASON_CODE_MAX_INFLIGHT.toInt()) else null
         })
         val manager = manager(fake)
 
         manager.start()
-        await { fake.attempted.size >= 23 }
+        await { fake.attempted.size >= 28 }
 
         val attemptedConfigs = fake.attempted.filter { it.topic.endsWith("/config") }
         val publishedConfigs = fake.published.filter { it.topic.endsWith("/config") }
         val androidVersion = "homeassistant/sensor/${MqttDiscovery.nodeId("dev1")}/android_version/config"
 
         // (a) Every entity is still attempted: one failure never aborts the loop.
-        assertEquals(21, attemptedConfigs.size)
+        assertEquals(26, attemptedConfigs.size)
         assertTrue(attemptedConfigs.any { it.topic == androidVersion })
 
         // (c) Entities after the failure still publish.
-        assertEquals(20, publishedConfigs.size)
+        assertEquals(25, publishedConfigs.size)
         assertFalse(publishedConfigs.any { it.topic == androidVersion })
         assertTrue(publishedConfigs.any { it.topic.endsWith("/loading/config") })
         assertTrue(publishedConfigs.last().topic.endsWith("/open_url/config"))
 
-        // (b) The reported result is honest: 20/21 topics and a real reason.
+        // (b) The reported result is honest: 25/26 topics and a real reason.
         val status = manager.status()
-        assertEquals(20, status.discoveryTopics)
+        assertEquals(25, status.discoveryTopics)
         assertNotNull(status.discoveryError)
         assertTrue(status.discoveryError!!.startsWith("MqttException"))
         assertFalse(status.discoveryError!!.contains("android_version")) // no config leaked
@@ -118,8 +121,8 @@ class MqttManagerPublishTest {
         await { fake.published.any { it.topic.endsWith("/status") } }
 
         val statusMessage = fake.published.last { it.topic.endsWith("/status") }
-        // The status payload carries this attempt's discovery result (20/21).
-        assertTrue(statusMessage.payload.contains("\"discoveryTopics\":20"))
+        // The status payload carries this attempt's discovery result (25/26).
+        assertTrue(statusMessage.payload.contains("\"discoveryTopics\":25"))
         assertTrue(statusMessage.payload.contains("\"discoveryError\":\"MqttException"))
     }
 
@@ -138,7 +141,7 @@ class MqttManagerPublishTest {
         await { manager.status().statusError != null }
 
         // Discovery is unaffected; only the status publish failed.
-        assertEquals(21, manager.status().discoveryTopics)
+        assertEquals(26, manager.status().discoveryTopics)
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         val statusError = manager.status().statusError
@@ -165,14 +168,14 @@ class MqttManagerPublishTest {
         // The availability publish was reached (and threw), yet discovery and
         // status still ran: one failed step never prevents a later one.
         assertTrue(fake.attempted.any { it.topic.endsWith("/availability") })
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         // The counters and error fields stay honest: availability is not part
         // of the discovery result, and nothing else was perturbed. The failed
         // availability is now recorded (it must not be only logged).
         val status = manager.status()
-        assertEquals(21, status.discoveryTopics)
+        assertEquals(26, status.discoveryTopics)
         assertEquals(null, status.discoveryError)
         assertNotNull(status.statusError)
         assertTrue(status.statusError!!.startsWith("RuntimeException"))
@@ -190,11 +193,11 @@ class MqttManagerPublishTest {
         // ran. Before the task-level isolation this RuntimeException escaped and
         // both were skipped.
         assertTrue(fake.subscribedTopics.any { it.endsWith("/command") })
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         val status = manager.status()
-        assertEquals(21, status.discoveryTopics)
+        assertEquals(26, status.discoveryTopics)
         assertEquals(null, status.discoveryError)
         assertEquals(null, status.statusError)
     }
@@ -210,18 +213,18 @@ class MqttManagerPublishTest {
         await { fake.attempted.any { it.topic.endsWith("/status") } }
 
         // Every entity is still attempted; the failure is counted, not skipped.
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         val status = manager.status()
-        assertEquals(20, status.discoveryTopics)
+        assertEquals(25, status.discoveryTopics)
         assertNotNull(status.discoveryError)
         assertTrue(status.discoveryError!!.startsWith("RuntimeException"))
         assertEquals(null, status.statusError)
 
         // The retained status payload carries the honest discovery result.
         val statusMessage = fake.published.last { it.topic.endsWith("/status") }
-        assertTrue(statusMessage.payload.contains("\"discoveryTopics\":20"))
+        assertTrue(statusMessage.payload.contains("\"discoveryTopics\":25"))
         assertTrue(statusMessage.payload.contains("\"discoveryError\":\"RuntimeException"))
     }
 
@@ -237,11 +240,11 @@ class MqttManagerPublishTest {
 
         // An Error, not just an Exception, must be contained: discovery and
         // status still run and nothing reaches the executor's thread handler.
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         val status = manager.status()
-        assertEquals(21, status.discoveryTopics)
+        assertEquals(26, status.discoveryTopics)
         assertEquals(null, status.discoveryError)
         // The failed availability is recorded even when the failure is an Error.
         assertNotNull(status.statusError)
@@ -258,11 +261,11 @@ class MqttManagerPublishTest {
         manager.start()
         await { fake.attempted.any { it.topic.endsWith("/status") } }
 
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
 
         val status = manager.status()
-        assertEquals(20, status.discoveryTopics)
+        assertEquals(25, status.discoveryTopics)
         assertNotNull(status.discoveryError)
         assertTrue(status.discoveryError!!.startsWith("OutOfMemoryError"))
         assertEquals(null, status.statusError)
@@ -287,7 +290,7 @@ class MqttManagerPublishTest {
         assertTrue(
             "maxInflight=$inflight must be large enough for every entity plus " +
                 "availability, status and command results",
-            inflight >= 21
+            inflight >= 26
         )
     }
 
@@ -302,11 +305,11 @@ class MqttManagerPublishTest {
         val manager = manager(fake, stateProvider = { provider() })
 
         manager.start()
-        await { manager.status().discoveryTopics == 21 }
+        await { manager.status().discoveryTopics == 26 }
         await { fake.published.any { it.topic.endsWith("/status") } }
 
         // The first connect published every entity and recorded no error.
-        assertEquals(21, manager.status().discoveryTopics)
+        assertEquals(26, manager.status().discoveryTopics)
         assertEquals(null, manager.status().discoveryError)
 
         // The second connect cannot read the state, so its attempt aborts
@@ -315,7 +318,7 @@ class MqttManagerPublishTest {
         manager.restart()
         await { manager.status().discoveryError != null }
 
-        // The previous connect's 21 topics must not survive alongside this
+        // The previous connect's 26 topics must not survive alongside this
         // attempt's error: that would be dishonest about what was published.
         assertEquals(0, manager.status().discoveryTopics)
         assertTrue(manager.status().discoveryError!!.startsWith("RuntimeException"))
@@ -345,9 +348,73 @@ class MqttManagerPublishTest {
 
         // The listener threw, yet availability, discovery and status all ran.
         assertTrue(calls >= 2)
-        assertEquals(21, fake.attempted.count { it.topic.endsWith("/config") })
+        assertEquals(26, fake.attempted.count { it.topic.endsWith("/config") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/availability") })
         assertTrue(fake.attempted.any { it.topic.endsWith("/status") })
+    }
+
+    // ---------------------------------------------------------------------
+    // command/result shape (X2: only `applied`/`reason` may be added)
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `a browser command result carries only id and ok`() {
+        val fake = FakeClient()
+        // An existing action's dispatcher result may still carry REST-only
+        // success fields (the whole state object, the URL). None of them may
+        // leak onto command/result: the payload must stay byte-identical to V1.
+        val manager = manager(
+            fake,
+            dispatcher = {
+                ApiResult.Ok(mapOf("state" to "ignored", "url" to "https://example.com/"))
+            }
+        )
+        manager.start()
+        await { fake.callback != null && fake.published.any { it.topic.endsWith("/status") } }
+
+        fake.callback!!.messageArrived(
+            "terebibro/dev1/command",
+            MqttMessage("""{"action":"open","url":"https://example.com/","id":42}""".toByteArray())
+        )
+
+        val result = fake.published.last { it.topic.endsWith("/command/result") }
+        // Exactly two keys: no state, url or any other REST-only field.
+        val obj = JSONObject(result.payload)
+        assertEquals(setOf("id", "ok"), obj.keys().asSequence().toSet())
+        assertEquals("42", obj.getString("id"))
+        assertTrue(obj.getBoolean("ok"))
+    }
+
+    @Test
+    fun `a media command while disabled reports applied false with no other fields`() {
+        val fake = FakeClient()
+        val manager = manager(
+            fake,
+            dispatcher = {
+                ApiResult.ok(
+                    "applied" to false,
+                    "reason" to "media_disabled",
+                    // A stray field must not be echoed, exactly as for a
+                    // browser action.
+                    "url" to "https://example.com/"
+                )
+            }
+        )
+        manager.start()
+        await { fake.callback != null && fake.published.any { it.topic.endsWith("/status") } }
+
+        fake.callback!!.messageArrived(
+            "terebibro/dev1/command",
+            MqttMessage("""{"action":"media-next","id":"7"}""".toByteArray())
+        )
+
+        val result = fake.published.last { it.topic.endsWith("/command/result") }
+        val obj = JSONObject(result.payload)
+        assertEquals(setOf("id", "ok", "applied", "reason"), obj.keys().asSequence().toSet())
+        assertEquals("7", obj.getString("id"))
+        assertTrue(obj.getBoolean("ok"))
+        assertFalse(obj.getBoolean("applied"))
+        assertEquals("media_disabled", obj.getString("reason"))
     }
 
     // ---------------------------------------------------------------------
@@ -357,12 +424,13 @@ class MqttManagerPublishTest {
     private fun manager(
         fake: FakeClient,
         stateProvider: () -> BrowserState? = { state },
-        onStatusChanged: () -> Unit = {}
+        onStatusChanged: () -> Unit = {},
+        dispatcher: (MqttCommand) -> ApiResult = { ApiResult.Ok() }
     ): MqttManager = MqttManager(
         settingsProvider = { settings },
         clientIdProvider = { "test-client" },
         dispatcher = object : MqttManager.Dispatcher {
-            override fun dispatch(command: MqttCommand): ApiResult = ApiResult.Ok()
+            override fun dispatch(command: MqttCommand): ApiResult = dispatcher(command)
         },
         stateProvider = stateProvider,
         deviceIdProvider = { "dev1" },

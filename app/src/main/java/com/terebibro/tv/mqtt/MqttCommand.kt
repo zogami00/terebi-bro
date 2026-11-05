@@ -1,5 +1,6 @@
 package com.terebibro.tv.mqtt
 
+import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.server.Json
 import com.terebibro.tv.web.UrlValidator
 import java.io.ByteArrayInputStream
@@ -15,7 +16,11 @@ enum class MqttAction {
     STOP,
     RESTART_WEBVIEW,
     CLEAR_CACHE,
-    CLEAR_SITE_DATA;
+    CLEAR_SITE_DATA,
+    MEDIA_NEXT,
+    MEDIA_PLAY,
+    MEDIA_PAUSE,
+    SET_MODE;
 
     companion object {
         /** Parses the wire name; null for anything unknown. */
@@ -30,6 +35,10 @@ enum class MqttAction {
             "restart-webview" -> RESTART_WEBVIEW
             "clear-cache" -> CLEAR_CACHE
             "clear-site-data" -> CLEAR_SITE_DATA
+            "media-next" -> MEDIA_NEXT
+            "media-play" -> MEDIA_PLAY
+            "media-pause" -> MEDIA_PAUSE
+            "set-mode" -> SET_MODE
             else -> null
         }
     }
@@ -40,13 +49,15 @@ enum class MqttAction {
  *
  * [url] is non-null exactly for [MqttAction.OPEN] and [MqttAction.SET_HOME], and
  * it has already been through [UrlValidator] (so a `javascript:`/`data:` URL can
- * never reach the WebView). [id] is the optional caller correlation id echoed
- * back on `command/result`.
+ * never reach the WebView). [mode] is non-null exactly for
+ * [MqttAction.SET_MODE] and is already restricted to a manual mode. [id] is the
+ * optional caller correlation id echoed back on `command/result`.
  */
 data class MqttCommand(
     val action: MqttAction,
     val url: String? = null,
-    val id: String? = null
+    val id: String? = null,
+    val mode: MediaMode? = null
 )
 
 /**
@@ -61,7 +72,24 @@ data class MqttCommand(
  */
 object MqttCommandParser {
 
-    private val ALLOWED_KEYS = setOf("action", "url", "id")
+    /**
+     * The union of every key any action may carry. The per-action allowed set
+     * is enforced below with [allowedKeysFor], so `mode` is not silently
+     * accepted on an action that has no use for it.
+     */
+    private val ALLOWED_KEYS = setOf("action", "url", "id", "mode")
+
+    /** Actions that carry no value: `media-next`, `media-play`, `media-pause`. */
+    private val VALUE_FREE_KEYS = setOf("action", "id")
+
+    /** `set-mode` requires `mode`; a URL is meaningless on it. */
+    private val SET_MODE_KEYS = setOf("action", "mode", "id")
+
+    /** The existing browser actions: only `open`/`set-home` *require* a URL. */
+    private val BROWSER_KEYS = setOf("action", "url", "id")
+
+    /** The modes an operator may request; `qms_focus` is the reducer's own. */
+    private const val ALLOWED_MODES = "qms_only, media_only, split"
 
     /** Bounds any free-form string from the broker so a payload cannot be unbounded. */
     private const val MAX_ID = 128
@@ -93,9 +121,33 @@ object MqttCommandParser {
         val action = MqttAction.fromWire(actionText)
             ?: return Result.Failed("unknown_action", "Unknown action: ${actionText.take(MAX_ACTION_ECHO)}")
 
+        // Each action has its own strict key set: a value carried on an action
+        // that cannot use it is rejected, not silently ignored.
+        val unexpected = values.keys - allowedKeysFor(action)
+        if (unexpected.isNotEmpty()) {
+            return Result.Failed(
+                "malformed_json",
+                "Unexpected key for \"$actionText\": ${unexpected.sorted().first().take(MAX_ACTION_ECHO)}"
+            )
+        }
+
         val id = when (val parsedId = parseId(values)) {
             is IdResult.Ok -> parsedId.value
             is IdResult.Bad -> return Result.Failed(parsedId.code, parsedId.message)
+        }
+
+        var mode: MediaMode? = null
+        if (action == MqttAction.SET_MODE) {
+            val raw = values["mode"] as? Json.Value.Str
+                ?: return Result.Failed(
+                    "bad_request",
+                    "Action \"set-mode\" requires a \"mode\": $ALLOWED_MODES"
+                )
+            mode = MediaMode.manualOrNull(raw.value)
+                ?: return Result.Failed(
+                    "bad_request",
+                    "Unknown mode \"${raw.value.take(MAX_ACTION_ECHO)}\": allowed values are $ALLOWED_MODES"
+                )
         }
 
         var url: String? = null
@@ -112,7 +164,14 @@ object MqttCommandParser {
             }
         }
 
-        return Result.Parsed(MqttCommand(action, url, id))
+        return Result.Parsed(MqttCommand(action, url, id, mode))
+    }
+
+    /** The keys each action may carry. Anything else is a malformed command. */
+    private fun allowedKeysFor(action: MqttAction): Set<String> = when (action) {
+        MqttAction.MEDIA_NEXT, MqttAction.MEDIA_PLAY, MqttAction.MEDIA_PAUSE -> VALUE_FREE_KEYS
+        MqttAction.SET_MODE -> SET_MODE_KEYS
+        else -> BROWSER_KEYS
     }
 
     // ---------------------------------------------------------------------

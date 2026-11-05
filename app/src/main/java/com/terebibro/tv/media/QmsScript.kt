@@ -136,9 +136,10 @@ object QmsScript {
 
                 function signalAudio() { post("audio", "1"); }
 
-                // Audio hook for M4. Best effort by design: a page that blocks
-                // one of these patches keeps its DOM watch, and the chime is
-                // simply not detected in M2.
+                // Audio hook. Best effort by design: a page that blocks one of
+                // these patches keeps its DOM watch, and the chime is simply
+                // not detected. The result is only consumed when the call
+                // source opts in, and it never carries a call number.
                 try {
                   var OriginalAudio = window.Audio;
                   if (typeof OriginalAudio === "function") {

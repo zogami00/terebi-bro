@@ -23,6 +23,48 @@ object MediaStateMachine {
      */
     const val MANUAL_INDEFINITE_UNTIL_MS = Long.MAX_VALUE
 
+    /**
+     * How close to a DOM call an audio signal must arrive to be treated as the
+     * same call. The observer and the chime describe one announcement; a chime
+     * 1 s or more after the DOM change is a separate signal and re-arms the
+     * dwell on its own.
+     */
+    const val AUDIO_DOM_DEBOUNCE_MS = 1000L
+
+    /**
+     * Whether the configured call source lets an audio signal stand in for a
+     * DOM call. Audio is opt-in: with `callSource = dom` it is ignored
+     * entirely, because a `<video>` used as a sound source is
+     * indistinguishable from programme audio.
+     */
+    fun audioCountsAsCall(callSource: CallSource): Boolean =
+        callSource == CallSource.DOM_OR_AUDIO || callSource == CallSource.AUDIO
+
+    /**
+     * Whether a DOM observation may trigger a call takeover. It always does
+     * unless the operator selected [CallSource.AUDIO], where the DOM still
+     * updates the strip text but only the chime may take the screen.
+     */
+    fun domTriggersCall(callSource: CallSource): Boolean =
+        callSource != CallSource.AUDIO
+
+    /**
+     * Whether an audio signal duplicates the DOM call that arrived just before
+     * it. [lastDomCallAtMs] is `0` when no DOM call has ever been observed, and
+     * a backwards clock is treated as a duplicate rather than letting a stale
+     * reading win.
+     */
+    fun audioIsDuplicateOfDomCall(nowMs: Long, lastDomCallAtMs: Long): Boolean =
+        lastDomCallAtMs > 0L && nowMs - lastDomCallAtMs < AUDIO_DOM_DEBOUNCE_MS
+
+    /**
+     * The whole chime decision in one pure predicate: an audio signal may act
+     * as a call only when the call source allows it and it does not duplicate a
+     * DOM call that just fired.
+     */
+    fun audioTriggersCall(cfg: MediaSettings, nowMs: Long, lastDomCallAtMs: Long): Boolean =
+        audioCountsAsCall(cfg.callSource) && !audioIsDuplicateOfDomCall(nowMs, lastDomCallAtMs)
+
     fun reduce(state: MediaState, event: MediaEvent, cfg: MediaSettings, nowMs: Long): MediaState {
         val current = expireManual(state, nowMs)
         return when (event) {

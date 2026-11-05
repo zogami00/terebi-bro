@@ -317,6 +317,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         super.onResume()
         webViewController.resume()
         mediaController.lifecycle(false)
+        // A file pushed with `adb` while the app is in the foreground must
+        // appear without a settings change; the controller re-reads the folder
+        // off the UI thread and keeps the playing item when it still exists.
+        mediaController.onResumeRescan()
         if (config.fullscreen) enterImmersiveMode()
     }
 
@@ -1499,6 +1503,36 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         }
     }
 
+    /**
+     * Plays the next queue item. A no-op while media mode is off: the result is
+     * still `ok`, with `applied:false` and a reason, so an automation never sees
+     * a failure for a feature that is simply turned off.
+     */
+    override fun mediaNext(): ApiResult = mediaCommand { it.next() }
+
+    /** Resumes playback. A no-op (see [mediaNext]) without media mode. */
+    override fun mediaPlay(): ApiResult = mediaCommand { it.resume() }
+
+    /** Pauses playback. A no-op (see [mediaNext]) without media mode. */
+    override fun mediaPause(): ApiResult = mediaCommand { it.pause() }
+
+    /**
+     * Runs a media action on the UI thread through the same controller methods
+     * the on-device menu and the REST routes use, so MQTT cannot introduce a
+     * second playback path.
+     */
+    private fun mediaCommand(action: (MediaController) -> Unit): ApiResult {
+        if (!config.mediaSettings.enabled) {
+            return ApiResult.ok("applied" to false, "reason" to "media_disabled")
+        }
+        MainThreadBridge.post {
+            action(mediaController)
+            seq.incrementAndGet()
+            broadcastState()
+        }
+        return ApiResult.ok("applied" to true)
+    }
+
     private fun applyMediaMode(mode: MediaMode): ApiResult {
         if (mode == MediaMode.QMS_FOCUS) {
             return ApiResult.badRequest("bad_request", "qms_focus is not a manual mode")
@@ -1627,6 +1661,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         MqttAction.RESTART_WEBVIEW -> restartWebView()
         MqttAction.CLEAR_CACHE -> clearCache()
         MqttAction.CLEAR_SITE_DATA -> clearSiteData()
+        // `set-mode` calls the same setMediaMode as `/api/media/mode`,
+        // including its `media_disabled` refusal. The three playback actions
+        // call the same MediaController methods as the on-device menu; only
+        // `set-mode` has a REST route.
+        MqttAction.MEDIA_NEXT -> mediaNext()
+        MqttAction.MEDIA_PLAY -> mediaPlay()
+        MqttAction.MEDIA_PAUSE -> mediaPause()
+        MqttAction.SET_MODE -> command.mode?.let { setMediaMode(it) }
+            ?: ApiResult.badRequest("bad_request", "set-mode requires a mode")
     }
 
     // ---------------------------------------------------------------------

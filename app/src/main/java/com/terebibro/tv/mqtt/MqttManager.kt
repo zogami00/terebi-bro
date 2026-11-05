@@ -556,7 +556,21 @@ class MqttManager(
         val obj = JSONObject()
         obj.put("id", id ?: JSONObject.NULL)
         when (result) {
-            is ApiResult.Ok -> obj.put("ok", true)
+            is ApiResult.Ok -> {
+                obj.put("ok", true)
+                // Only the two media fields are echoed. Most success results
+                // carry REST-only fields (the whole state object, a URL, the
+                // selected mode); merging those would change the documented
+                // `{"id":…,"ok":true}` result of every existing action. A media
+                // action uses `applied`/`reason` to say
+                // `applied:false, reason:media_disabled` instead of failing when
+                // the feature is simply switched off.
+                for (key in RESULT_FIELDS) {
+                    if (result.fields.containsKey(key)) {
+                        obj.put(key, result.fields[key] ?: JSONObject.NULL)
+                    }
+                }
+            }
             is ApiResult.Err -> {
                 obj.put("ok", false)
                 obj.put(
@@ -753,6 +767,13 @@ class MqttManager(
         const val MAX_INCOMING_PAYLOAD = 4096
 
         private const val PAYLOAD_TOO_LARGE_STATUS = 413
+
+        /**
+         * The success fields `command/result` echoes. Everything else in an
+         * [ApiResult.Ok] is REST-only and must not appear on the MQTT result,
+         * so an existing action's payload stays exactly `{"id":…,"ok":true}`.
+         */
+        private val RESULT_FIELDS = listOf("applied", "reason")
 
         /** Constant log line for a retained command that is intentionally ignored. */
         const val RETAINED_COMMAND_IGNORED =

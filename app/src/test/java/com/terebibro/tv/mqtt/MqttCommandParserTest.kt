@@ -1,5 +1,6 @@
 package com.terebibro.tv.mqtt
 
+import com.terebibro.tv.media.MediaMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -111,5 +112,93 @@ class MqttCommandParserTest {
     fun `a wrong id type is a clear failure`() {
         assertEquals("bad_id", failed("""{"action":"home","id":true}""").code)
         assertEquals("bad_id", failed("""{"action":"home","id":1.5}""").code)
+    }
+
+    // ---------------------------------------------------------------------
+    // Media actions
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `every value-free media action parses without extra keys`() {
+        val expected = mapOf(
+            "media-next" to MqttAction.MEDIA_NEXT,
+            "media-play" to MqttAction.MEDIA_PLAY,
+            "media-pause" to MqttAction.MEDIA_PAUSE
+        )
+        for ((wire, action) in expected) {
+            val command = parsed("""{"action":"$wire","id":"abc"}""")
+            assertEquals(action, command.action)
+            assertNull(command.url)
+            assertNull(command.mode)
+            assertEquals("abc", command.id)
+        }
+    }
+
+    @Test
+    fun `set-mode accepts exactly the three manual modes`() {
+        val expected = mapOf(
+            "qms_only" to MediaMode.QMS_ONLY,
+            "media_only" to MediaMode.MEDIA_ONLY,
+            "split" to MediaMode.SPLIT
+        )
+        for ((wire, mode) in expected) {
+            val command = parsed("""{"action":"set-mode","mode":"$wire"}""")
+            assertEquals(MqttAction.SET_MODE, command.action)
+            assertEquals(mode, command.mode)
+            assertNull(command.url)
+        }
+    }
+
+    @Test
+    fun `set-mode without a mode is a bad request naming the allowed values`() {
+        val failure = failed("""{"action":"set-mode"}""")
+        assertEquals("bad_request", failure.code)
+        assertTrue(failure.message, failure.message.contains("qms_only"))
+        assertTrue(failure.message, failure.message.contains("media_only"))
+        assertTrue(failure.message, failure.message.contains("split"))
+    }
+
+    @Test
+    fun `set-mode rejects qms_focus as a bad request`() {
+        val failure = failed("""{"action":"set-mode","mode":"qms_focus"}""")
+        assertEquals("bad_request", failure.code)
+        assertTrue(failure.message, failure.message.contains("qms_focus"))
+        assertTrue(failure.message, failure.message.contains("qms_only"))
+    }
+
+    @Test
+    fun `set-mode rejects an unknown mode`() {
+        val failure = failed("""{"action":"set-mode","mode":"fullscreen"}""")
+        assertEquals("bad_request", failure.code)
+        assertTrue(failure.message, failure.message.contains("fullscreen"))
+        assertTrue(failure.message, failure.message.contains("split"))
+    }
+
+    @Test
+    fun `set-mode rejects a non-string mode`() {
+        assertEquals("bad_request", failed("""{"action":"set-mode","mode":1}""").code)
+    }
+
+    @Test
+    fun `a value-free media action rejects a url`() {
+        for (wire in listOf("media-next", "media-play", "media-pause")) {
+            assertEquals(
+                wire,
+                "malformed_json",
+                failed("""{"action":"$wire","url":"https://example.com/"}""").code
+            )
+        }
+    }
+
+    @Test
+    fun `set-mode rejects a url and a media action rejects a mode`() {
+        assertEquals(
+            "malformed_json",
+            failed("""{"action":"set-mode","mode":"split","url":"https://example.com/"}""").code
+        )
+        assertEquals(
+            "malformed_json",
+            failed("""{"action":"media-play","mode":"split"}""").code
+        )
     }
 }

@@ -116,6 +116,12 @@ object MqttDiscovery {
                     unit = "s", deviceClass = "duration"
                 )
             )
+            // Media mode: the current display mode, and the newest call the
+            // strip is showing. The latter is the same string the strip
+            // renders, so a chime-only trigger (which never invents a number)
+            // leaves it as it was.
+            add(ctx.sensor("media_mode", "Mode", status, "{{ value_json.mediaMode }}"))
+            add(ctx.sensor("qms_now", "Now serving", status, "{{ value_json.qmsNow | truncate(250, true) }}"))
 
             // --- Diagnostic sensors ---------------------------------------
             add(ctx.sensor("webview_version", "WebView version", status, "{{ value_json.webViewVersion }}", category = CATEGORY_DIAGNOSTIC))
@@ -152,6 +158,11 @@ object MqttDiscovery {
             add(ctx.button("stop", "Stop", command, "stop"))
             add(ctx.button("clear_cache", "Clear cache", command, "clear-cache"))
             add(ctx.button("clear_site_data", "Clear site data", command, "clear-site-data"))
+            // Media mode: three separate buttons rather than a toggle, so HA
+            // never has to infer whether "play" means play or pause.
+            add(ctx.button("media_next", "Next", command, "media-next"))
+            add(ctx.button("media_play", "Play", command, "media-play"))
+            add(ctx.button("media_pause", "Pause", command, "media-pause"))
 
             // --- Text (command JSON with a value) -------------------------
             add(
