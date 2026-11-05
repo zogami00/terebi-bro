@@ -427,13 +427,20 @@ native player path.
   the convention `/api/settings/mqtt` follows for `mqttPasswordSet`.
 - The **D-pad only reaches the page in `media_only`**. In `split` the media
   WebView is not focusable, so the remote keeps driving the QMS page; switch to
-  `media_only` to navigate the page. In `media_only` the activity hands every
+  `media_only` to navigate the page. The decision is made once, in the pure
+  `MediaKeyRoute.route(key, mode, webActive, overlayVisible)` predicate, and both
+  the hardware remote and `POST /api/dpad` use it — the controller's on-screen
+  D-pad used to call the QMS view directly and kept navigating the hidden QMS
+  page. In `media_only` with a web page and no overlay the activity hands every
   `DPAD`/`ENTER` press and release straight to the page's `WebView` instead of
   relying on window focus, because a device was observed reporting focus on the
   page while the page still never received the key. The event is consumed even
-  if the page ignores it, so it cannot fall through to the hidden QMS page. The
-  same routing keeps working while the page's own HTML5 fullscreen view covers
-  the band: the keys still go to the page's `WebView` behind that view.
+  if the page ignores it, so it cannot fall through to the hidden QMS page; a
+  guard refuses and logs once if a synthetic key would ever reach the QMS view
+  in that state. `back` from `/api/dpad` still takes the normal `onRemoteBack()`
+  ladder. The same routing keeps working while the page's own HTML5 fullscreen
+  view covers the band: the keys still go to the page's `WebView` behind that
+  view.
 - The **QMS surface is genuinely gone in `media_only`**, not merely covered.
   `webview_container` is `GONE` and the QMS page itself is `GONE`, so it can
   neither take a key nor keep the Split band's height; the layout pass asserts

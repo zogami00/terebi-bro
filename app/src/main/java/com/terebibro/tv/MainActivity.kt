@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.SurfaceView
@@ -36,8 +37,10 @@ import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
 import com.terebibro.tv.media.MediaController
+import com.terebibro.tv.media.KeyTarget
 import com.terebibro.tv.media.MediaKey
 import com.terebibro.tv.media.MediaKeyGuard
+import com.terebibro.tv.media.MediaKeyRoute
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
@@ -187,6 +190,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     /** The mode the last layout pass applied; used to notice a mode change. */
     private var lastMediaMode = MediaMode.QMS_ONLY
+
+    /**
+     * Logged once when the synthetic-key guard had to drop a key that would
+     * otherwise have reached the QMS view while `MEDIA_ONLY` with a web source
+     * owns the screen. The route predicate should make this unreachable; the
+     * bit keeps a regression from flooding logcat without hiding it.
+     */
+    @Volatile
+    private var qmsSyntheticKeyGuardLogged = false
 
     /** The inputs the injected script was last built from; avoids needless rebuilds. */
     private var appliedQmsSignature: String? = null
@@ -1450,10 +1462,12 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
      * because an invisible view cannot take focus.
      */
     private fun mediaPageOwnsKeys(): Boolean =
-        config.mediaSettings.enabled &&
-            mediaController.currentMode() == MediaMode.MEDIA_ONLY &&
-            mediaController.isWebSource() &&
-            !anyOverlayVisible()
+        MediaKeyRoute.route(
+            MediaKey.DPAD,
+            mediaController.currentMode(),
+            mediaController.isWebSource(),
+            anyOverlayVisible()
+        ) == KeyTarget.MEDIA
 
     /**
      * Keeps the media page as the focused view before a key is routed. Focus is
@@ -1873,12 +1887,83 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         )
     }
 
-    override fun dpad(key: String): ApiResult {
+    /**
+     * Routes `POST /api/dpad` through [MediaKeyRoute], the same predicate the
+     * hardware remote uses. `back` is not a direction key and deliberately
+     * keeps going through [WebViewController.dispatchDpad] so it still ends at
+     * the unchanged `onRemoteBack()` ladder.
+     */
+    private fun routeSyntheticDpad(key: String): ApiResult {
+        val mediaKey = dpadMediaKey(key)
+        val mode = mediaController.currentMode()
+        val webActive = mediaController.isWebSource()
+        if (mediaKey != null) {
+            val target = MediaKeyRoute.route(
+                mediaKey,
+                mode,
+                webActive,
+                anyOverlayVisible()
+            )
+            // Invariant: while MEDIA_ONLY has a web page on screen the QMS view
+            // must never receive a synthetic key. The route guarantees it; this
+            // explicit guard turns a regression into a dropped key and one log
+            // line instead of a second WebView acting on it.
+            if (target == KeyTarget.QMS && mode == MediaMode.MEDIA_ONLY && webActive) {
+                if (!qmsSyntheticKeyGuardLogged) {
+                    qmsSyntheticKeyGuardLogged = true
+                    SafeLog.e(
+                        TAG,
+                        "Dropped synthetic QMS key in MEDIA_ONLY with a web source"
+                    )
+                }
+                return ApiResult.ok()
+            }
+            when (target) {
+                KeyTarget.MEDIA -> return dispatchDpadToMediaPage(key)
+                KeyTarget.NONE -> return ApiResult.ok()
+                KeyTarget.QMS -> Unit
+            }
+        }
         return when (val outcome = webViewController.dispatchDpad(key)) {
             is WebViewController.Outcome.Ok -> ApiResult.ok()
-            is WebViewController.Outcome.Error -> ApiResult.badRequest(outcome.code, outcome.message)
+            is WebViewController.Outcome.Error ->
+                ApiResult.badRequest(outcome.code, outcome.message)
         }
     }
+
+    private fun dpadMediaKey(key: String): MediaKey? = when (key.lowercase()) {
+        "up", "down", "left", "right" -> MediaKey.DPAD
+        "ok" -> MediaKey.ENTER
+        else -> null
+    }
+
+    private fun dpadKeyCode(key: String): Int? = when (key.lowercase()) {
+        "up" -> KeyEvent.KEYCODE_DPAD_UP
+        "down" -> KeyEvent.KEYCODE_DPAD_DOWN
+        "left" -> KeyEvent.KEYCODE_DPAD_LEFT
+        "right" -> KeyEvent.KEYCODE_DPAD_RIGHT
+        "ok" -> KeyEvent.KEYCODE_DPAD_CENTER
+        else -> null
+    }
+
+    /**
+     * Delivers both the press and the release to the media band's page. The QMS
+     * view is not consulted, so one key cannot reach two WebViews.
+     */
+    private fun dispatchDpadToMediaPage(key: String): ApiResult {
+        val code = dpadKeyCode(key)
+            ?: return ApiResult.badRequest("bad_key", "Unknown D-pad key")
+        val page = (if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null)
+            ?: return ApiResult.unavailable()
+        val now = SystemClock.uptimeMillis()
+        page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
+        page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+        return ApiResult.ok()
+    }
+
+    override fun dpad(key: String): ApiResult =
+        MainThreadBridge.runOnMain { it.routeSyntheticDpad(key) }
+            ?: ApiResult.unavailable()
 
     override fun setDeviceName(name: String): ApiResult {
         config.deviceName = name
