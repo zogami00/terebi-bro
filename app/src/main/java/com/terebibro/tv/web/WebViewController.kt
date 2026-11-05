@@ -81,6 +81,15 @@ class WebViewController(
     private var title = ""
 
     /**
+     * True once the current document's load has started. Used to decide
+     * whether installing the script must evaluate it against the document
+     * already on screen: document-start only reaches documents created after
+     * the handler is installed, so a page started before that would otherwise
+     * never run the script.
+     */
+    private var pageStarted = false
+
+    /**
      * True while the document on screen is a committed, finished load. The
      * fallback injection may only run against an existing document: an
      * evaluation issued into a navigation in flight is lost with the document
@@ -285,12 +294,12 @@ class WebViewController(
                     applyQmsBridge(view)
                 }
                 applyQmsScriptTo(view)
-                // Enabling media mode (or changing the script) while the QMS
-                // page is already open must start detection now; a
-                // document-start rule only applies to the next document.
-                // Nothing happens while the page is still loading — the
-                // page-load fallback owns that case.
-                evaluateQmsOnLoadedPage(view)
+                // A document that has already started cannot have run a
+                // handler installed just now: document-start only applies to
+                // documents created after the call. Evaluate once against the
+                // current document on both paths; the script's install guard
+                // makes a second run harmless.
+                evaluateQmsOnExistingDocument(view)
             }
             true
         }
@@ -339,23 +348,23 @@ class WebViewController(
     }
 
     /**
-     * Runs the script once against the document that is already on screen.
+     * Runs the script once against the document that is already on screen or
+     * in flight.
      *
-     * This is the missing half of the Chromium 66 fallback: there the script
-     * is only injected from `onPageStarted`/`onPageFinished`, so enabling
-     * media mode on an already-loaded page would otherwise wait for the next
-     * navigation. Three conditions keep it harmless:
+     * This is the fix for the install-ordering gap: a document-start handler
+     * is installed after the page may have started loading (a settings change
+     * on an already-loaded page, or a load triggered before `onCreate`
+     * installed the script), and such a document never runs it. The check is
+     * on `pageStarted`, **not** on whether a handler exists — the handler
+     * existing only proves future documents will get it.
      *
-     * - an installed document-start handler already ran at document start, so
-     *   the document-start path does nothing extra here;
-     * - a page still loading is left to the page-load fallback;
-     * - the script's own `__terebiQmsInstalled` guard makes a second
-     *   evaluation a no-op, and its origin gate keeps other pages out.
+     * The script's own `__terebiQmsInstalled` guard makes this evaluation a
+     * no-op on a document that already ran it, and its origin gate keeps other
+     * pages out.
      */
-    private fun evaluateQmsOnLoadedPage(view: WebView) {
+    private fun evaluateQmsOnExistingDocument(view: WebView) {
         if (qmsScript.isEmpty() || qmsOrigin.isEmpty()) return
-        if (qmsHandler != null) return
-        if (!pageLoaded) return
+        if (!QmsInjection.shouldEvaluateOnInstall(documentStartSupported(), pageStarted)) return
         view.evaluateJavascript(qmsScript, null)
     }
 
@@ -464,7 +473,11 @@ class WebViewController(
         webView = replacement
         // A new WebView has neither the JavaScript interface nor the
         // document-start handler; both are re-applied before the first load.
+        // It has no document yet, so the handler will reach this load at
+        // document-start (or the page callbacks will inject it) without an
+        // immediate evaluation.
         pageLoaded = false
+        pageStarted = false
         applyQmsBridge(replacement)
         applyQmsScriptTo(replacement)
         target.addView(
@@ -505,6 +518,7 @@ class WebViewController(
             loading = true
             progress = 0
             pageLoaded = false
+            pageStarted = true
             injectQmsFallback(view)
             listener.onWebPageStarted(url)
             listener.onWebStateChanged()

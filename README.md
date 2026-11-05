@@ -271,6 +271,16 @@ form, and reaches `split` only once the dashboard is actually rendering. A
 renderer crash or a WebView restart resets that history, because the reload
 lands on the activation page again.
 
+Installing the script against a page that is **already loading or loaded**
+evaluates it once immediately, on both the document-start and fallback paths.
+The document-start handler only reaches documents created after it is installed,
+so without that immediate evaluation enabling media mode on a live page (or a
+startup ordering where the load began first) would leave the strip unprobed
+until a manual reload. The script's own install guard makes the second run
+harmless, and its observer plus one-second re-probe cover a document that was
+evaluated before its cards rendered. A WebView restart re-installs the script
+before the new load, so it too needs no manual reload.
+
 ### The strip
 
 The queue band is a restyle of the vendor page's own nodes, not a copy of its
@@ -417,6 +427,27 @@ native player path.
 - The **D-pad only reaches the page in `media_only`**. In `split` the media
   WebView is not focusable, so the remote keeps driving the QMS page; switch to
   `media_only` to navigate the page.
+- **HTML5 fullscreen is band-scoped.** A YouTube/Jellyfin fullscreen request is
+  honoured by adding the page's own fullscreen view inside the media band
+  (`media_container`), above the page, with a black background; the page is
+  hidden while it shows. It is **never** routed through the QMS WebView's
+  fullscreen path, which swaps into the whole screen. In `media_only` the band
+  *is* the whole screen, so the result is real fullscreen; in `split` the view
+  fills only the media band and the queue stays visible, which is intended. Back
+  leaves the video before it leaves the workspace, and a `QMS_FOCUS` takeover
+  (or another source taking the band) removes the fullscreen view first. A
+  renderer crash clears the stored view and callback so a dead view is never
+  left attached.
+- **Typing needs an IME.** `windowSoftInputMode` is `adjustResize`, and the
+  activity no longer re-applies immersive mode while the soft keyboard is up
+  (API 30+ reads `WindowInsets.Type.ime()`; below 30 it treats a focused media
+  page in `media_only` as the conservative case). The page is focusable and
+  touches focus in `media_only`. The on-device menu also has **Show keyboard**
+  (only in `media_only` with a web page open), which raises the IME with
+  `SHOW_FORCED` and says so in the menu banner when the device has no IME at
+  all. **On a television the reliable path is Jellyfin's Quick Connect, or a
+  USB/Bluetooth keyboard** — a soft keyboard depends on the device having an IME
+  installed and selectable in the first place.
 - Cookies and DOM storage are enabled (defaults) so a Jellyfin login survives
   for the process lifetime. The media view has **no JavaScript bridge at all**;
   the QMS view exposes only `terebiQms`, the write-only signal sink. Non-`http(s)`
@@ -542,9 +573,11 @@ the on-device **menu** with:
 
 The menu items are **Home**, **Reload**, **Refresh WebView** (the existing
 WebView restart), **Enter URL**, **Settings**, **Device information** and
-**Exit App**. **Back closes the menu** without acting on any item, and the menu
-never traps focus — a short Back press runs the normal Back ladder from wherever
-focus is.
+**Exit App**. In `media_only` with a web page open it also shows **Show
+keyboard**, which raises the device IME for that page (and reports in the menu
+banner when the TV has no IME at all). **Back closes the menu** without acting on
+any item, and the menu never traps focus — a short Back press runs the normal
+Back ladder from wherever focus is.
 
 **Enter URL** opens a dialog with a text field and **Open**,
 **Open + Set as Home** and **Cancel**. It is fully usable with both a
@@ -1023,7 +1056,7 @@ real-hardware behaviour remains unverified.
 
 V2 is validated **at the JVM and build level only**:
 
-- `testDebugUnitTest` passes: **554 JVM tests, 0 failures, 1 skipped** (a symlink
+- `testDebugUnitTest` passes: **591 JVM tests, 0 failures, 1 skipped** (a symlink
   test skipped on Windows). This includes the media reducer and layout, the
   settings validator, the QMS call key, signal clamp and injected-script
   escaping, the media queue and playlist parser, the upload rules, the media
@@ -1032,10 +1065,15 @@ V2 is validated **at the JVM and build level only**:
   (each button payload re-parsed through the real command parser), the
   `command/result` shape (an existing action still reports exactly
   `{"id":…,"ok":true}`, and a disabled media action adds only
-  `applied`/`reason`), and the chime rule (source gating, the 1 s DOM-call
+  `applied`/`reason`), the chime rule (source gating, the 1 s DOM-call
   debounce, and the `audio` source suppressing the DOM takeover while still
-  updating the strip text).
-- `lintDebug` runs with **0 errors**; its 34 warnings are pre-existing
+  updating the strip text), the media-web policy (band-scoped fullscreen is
+  allowed only in `media_only`/`split` with a web source, and immersive mode is
+  not re-applied while the keyboard is up), the independence guard that a
+  media playback error cannot change `qmsDetectionHealthy`, `qmsMatched` or
+  `qmsAvailable`, and the QMS install predicate (an already-started page is
+  evaluated immediately, with or without document-start support).
+- `lintDebug` runs with **0 errors**; its 35 warnings are pre-existing
   (`setText` literals and dependency-version notices in `MainActivity`, plus
   manifest and resource warnings), and there are no new warnings in the media or
   MQTT code.

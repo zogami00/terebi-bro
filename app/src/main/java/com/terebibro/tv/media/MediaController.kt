@@ -496,6 +496,10 @@ class MediaController(
      */
     fun onWebLoadFailed() {
         if (!state.enabled || !MediaSource.isWeb(source)) return
+        // Deliberately a media-only failure: dropWebSource dispatches a
+        // PlaybackError, which never touches qmsDetectionHealthy, qmsNow,
+        // qmsLocation or qmsAvailable. QMS detection is owned by the other
+        // WebView and must not change because a media page failed.
         dropWebSource(WEB_LOAD_FAILED)
     }
 
