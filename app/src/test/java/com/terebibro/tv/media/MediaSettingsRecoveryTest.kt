@@ -7,7 +7,7 @@ import org.junit.Test
 
 class MediaSettingsRecoveryTest {
 
-    /** A settings object where none of the 27 fields holds its default. */
+    /** A settings object where none of the 30 fields holds its default. */
     private fun nonDefault() = MediaSettings(
         enabled = true,
         qmsUrl = "https://qms.example/board",
@@ -31,6 +31,9 @@ class MediaSettingsRecoveryTest {
         playlistEnabled = true,
         playlistUrl = "https://example.com/list.json",
         playlistRefreshSec = 600,
+        mediaWebUrl = "https://jellyfin.example/web?token=abc",
+        mediaWebEnabled = true,
+        mediaSourceDefault = MediaSourceDefault.WEB,
         imageDurationSec = 20,
         volumePercent = 70,
         mediaFillMode = MediaFillMode.COVER,
@@ -61,6 +64,9 @@ class MediaSettingsRecoveryTest {
         Keys.PLAYLIST_ENABLED to settings.playlistEnabled,
         Keys.PLAYLIST_URL to settings.playlistUrl,
         Keys.PLAYLIST_REFRESH_SEC to settings.playlistRefreshSec,
+        Keys.WEB_URL to settings.mediaWebUrl,
+        Keys.WEB_ENABLED to settings.mediaWebEnabled,
+        Keys.SOURCE_DEFAULT to settings.mediaSourceDefault.wire,
         Keys.IMAGE_DURATION_SEC to settings.imageDurationSec,
         Keys.VOLUME_PERCENT to settings.volumePercent,
         Keys.FILL_MODE to settings.mediaFillMode.wire,
@@ -227,5 +233,64 @@ class MediaSettingsRecoveryTest {
         MediaSettingsRecovery.recover(raw, homeUrl = "https://dashboard.example")
         // The stored value stays blank, so it keeps tracking the Home URL.
         assertEquals("", raw[Keys.QMS_URL])
+    }
+
+    // ------------------------------------------------- persisted web source
+
+    @Test
+    fun `the web settings recover when stored`() {
+        val raw = rawOf(nonDefault()).apply {
+            put(Keys.WEB_URL, "https://jellyfin.example/web?token=x")
+            put(Keys.WEB_ENABLED, true)
+            put(Keys.SOURCE_DEFAULT, "web")
+        }
+
+        val recovered = MediaSettingsRecovery.recover(raw)
+
+        // Stored in full: only the published state masks it.
+        assertEquals("https://jellyfin.example/web?token=x", recovered.mediaWebUrl)
+        assertTrue(recovered.mediaWebEnabled)
+        assertEquals(MediaSourceDefault.WEB, recovered.mediaSourceDefault)
+    }
+
+    @Test
+    fun `each web field falls back independently`() {
+        val raw = rawOf(nonDefault()).apply {
+            put(Keys.WEB_URL, 42)            // wrong type
+            put(Keys.WEB_ENABLED, "yes")     // wrong type
+            put(Keys.SOURCE_DEFAULT, "dvd")  // unknown wire
+        }
+
+        val recovered = MediaSettingsRecovery.recover(raw)
+
+        val d = MediaSettings()
+        assertEquals(d.mediaWebUrl, recovered.mediaWebUrl)
+        assertEquals(d.mediaWebEnabled, recovered.mediaWebEnabled)
+        assertEquals(d.mediaSourceDefault, recovered.mediaSourceDefault)
+        // Nothing else was touched.
+        assertEquals(nonDefault().volumePercent, recovered.volumePercent)
+        assertTrue(recovered.enabled)
+    }
+
+    @Test
+    fun `a stored web default without a url falls back to local only`() {
+        val expected = nonDefault()
+        val raw = rawOf(expected).apply {
+            put(Keys.WEB_URL, "")
+            put(Keys.SOURCE_DEFAULT, "web")
+        }
+
+        val recovered = MediaSettingsRecovery.recover(raw)
+
+        assertEquals(MediaSourceDefault.LOCAL, recovered.mediaSourceDefault)
+        // Only the source-selector field is repaired; the URL is blank because
+        // that is what was stored, and nothing else moves.
+        assertEquals(
+            expected.copy(
+                mediaWebUrl = "",
+                mediaSourceDefault = MediaSourceDefault.LOCAL
+            ),
+            recovered
+        )
     }
 }

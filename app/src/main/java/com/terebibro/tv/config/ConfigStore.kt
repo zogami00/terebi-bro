@@ -218,6 +218,9 @@ class ConfigStore(context: Context) {
         editor.putBoolean(KEY_MEDIA_PLAYLIST_ENABLED, settings.playlistEnabled)
         editor.putString(KEY_MEDIA_PLAYLIST_URL, settings.playlistUrl)
         editor.putInt(KEY_MEDIA_PLAYLIST_REFRESH_SEC, settings.playlistRefreshSec)
+        editor.putString(KEY_MEDIA_WEB_URL, settings.mediaWebUrl)
+        editor.putBoolean(KEY_MEDIA_WEB_ENABLED, settings.mediaWebEnabled)
+        editor.putString(KEY_MEDIA_SOURCE_DEFAULT, settings.mediaSourceDefault.wire)
         editor.putInt(KEY_MEDIA_IMAGE_DURATION_SEC, settings.imageDurationSec)
         editor.putInt(KEY_MEDIA_VOLUME_PERCENT, settings.volumePercent)
         editor.putString(KEY_MEDIA_FILL_MODE, settings.mediaFillMode.wire)
@@ -347,6 +350,9 @@ class ConfigStore(context: Context) {
         private const val KEY_MEDIA_PLAYLIST_ENABLED = MediaSettingsRecovery.Keys.PLAYLIST_ENABLED
         private const val KEY_MEDIA_PLAYLIST_URL = MediaSettingsRecovery.Keys.PLAYLIST_URL
         private const val KEY_MEDIA_PLAYLIST_REFRESH_SEC = MediaSettingsRecovery.Keys.PLAYLIST_REFRESH_SEC
+        private const val KEY_MEDIA_WEB_URL = MediaSettingsRecovery.Keys.WEB_URL
+        private const val KEY_MEDIA_WEB_ENABLED = MediaSettingsRecovery.Keys.WEB_ENABLED
+        private const val KEY_MEDIA_SOURCE_DEFAULT = MediaSettingsRecovery.Keys.SOURCE_DEFAULT
         private const val KEY_MEDIA_IMAGE_DURATION_SEC = MediaSettingsRecovery.Keys.IMAGE_DURATION_SEC
         private const val KEY_MEDIA_VOLUME_PERCENT = MediaSettingsRecovery.Keys.VOLUME_PERCENT
         private const val KEY_MEDIA_FILL_MODE = MediaSettingsRecovery.Keys.FILL_MODE

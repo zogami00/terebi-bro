@@ -222,6 +222,9 @@ class MediaPlayerHost(
             // Video deliberately ignores the fill mode: a video's own
             // letterbox is part of the frame and cannot be cropped behind it.
             MediaItem.Kind.IMAGE -> playImage(item)
+            // The media WebView covers the band; the native host renders
+            // nothing for it.
+            MediaItem.Kind.WEB -> showWeb()
         }
     }
 
@@ -280,6 +283,23 @@ class MediaPlayerHost(
         imageView.visibility = View.GONE
         surfaceView.visibility = View.GONE
         placeholder.visibility = View.VISIBLE
+    }
+
+    /**
+     * Clears the native band so the media WebView (a sibling in front of it) is
+     * all that shows. The player and its audio focus are released; the still
+     * bitmap is recycled. No placeholder: the page is the picture.
+     */
+    fun showWeb() {
+        generation++
+        resumeOnFocusGain = false
+        releasePlayer()
+        clearBitmap()
+        imageView.setImageDrawable(null)
+        backdropView.visibility = View.GONE
+        imageView.visibility = View.GONE
+        surfaceView.visibility = View.GONE
+        placeholder.visibility = View.GONE
     }
 
     fun release() {

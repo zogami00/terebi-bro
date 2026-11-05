@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
@@ -17,6 +18,7 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -24,6 +26,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.webkit.WebChromeClient
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import com.terebibro.tv.BuildConfig
@@ -39,6 +42,9 @@ import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaStore
+import com.terebibro.tv.media.MediaWebSurface
+import com.terebibro.tv.media.MediaWebFullscreenHost
+import com.terebibro.tv.media.MediaWebPolicy
 import com.terebibro.tv.media.QmsScript
 import com.terebibro.tv.mqtt.MqttAction
 import com.terebibro.tv.mqtt.MqttCommand
@@ -74,7 +80,8 @@ import kotlin.math.roundToInt
  * mDNS advertisement, the optional MQTT client and the TV-side setup / error /
  * menu overlays.
  */
-class MainActivity : Activity(), WebViewController.Listener, ControllerHost, MqttManager.Dispatcher {
+class MainActivity : Activity(), WebViewController.Listener, ControllerHost, MqttManager.Dispatcher,
+    MediaWebFullscreenHost {
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var webViewContainer: FrameLayout
@@ -111,7 +118,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var menuMediaPlayPauseButton: Button
     private lateinit var menuMediaNextButton: Button
     private lateinit var menuMediaUrlButton: Button
+    private lateinit var menuMediaWebButton: Button
     private lateinit var menuMediaModeButton: Button
+    private lateinit var menuMediaKeyboardButton: Button
+    private lateinit var menuMediaBanner: TextView
     private lateinit var menuSettingsButton: Button
     private lateinit var menuDeviceButton: Button
     private lateinit var menuExitButton: Button
@@ -125,6 +135,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var localNetwork: LocalNetwork
     private lateinit var webViewController: WebViewController
     private lateinit var mediaStore: MediaStore
+    private lateinit var mediaWebSurface: MediaWebSurface
     private lateinit var mediaController: MediaController
     private lateinit var auth: AuthManager
     private lateinit var wsHub: WsHub
@@ -154,6 +165,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private var customView: View? = null
     private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
 
+    /**
+     * The media band's own HTML5 fullscreen view. Deliberately separate from
+     * [customView]: the QMS page swaps its view into `root_container`, while
+     * this one belongs to `media_container` and must disappear with the band.
+     */
+    private var mediaFullscreenView: View? = null
+    private var mediaFullscreenCallback: WebChromeClient.CustomViewCallback? = null
+
     private var retryRunnable: Runnable? = null
     private var retryRemaining = 0
     private var pageHasError = false
@@ -164,6 +183,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
      * itself just like them.
      */
     private var dialogVisible = false
+
+    /** The mode the last layout pass applied; used to notice a mode change. */
+    private var lastMediaMode = MediaMode.QMS_ONLY
 
     /** The inputs the injected script was last built from; avoids needless rebuilds. */
     private var appliedQmsSignature: String? = null
@@ -195,6 +217,20 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         }
 
         mediaStore = MediaStore(this)
+        // The second renderer is created lazily on the first web source, but
+        // the surface object exists now so the controller can own its focus and
+        // lifecycle without Android types.
+        mediaWebSurface = MediaWebSurface(
+            activity = this,
+            container = mediaContainer,
+            onLoadFailed = {
+                // A page that will not load must not keep the band: the
+                // controller clears the web source and the folder/playlist
+                // takes over.
+                if (::mediaController.isInitialized) mediaController.onWebLoadFailed()
+            },
+            fullscreenHost = this
+        )
         mediaController = MediaController(
             mediaStore,
             { config.mediaSettings },
@@ -209,7 +245,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             qmsOrigin = { qmsOriginOf(config.mediaSettings) },
             // The last-good playlist lives on internal storage: it is a small
             // JSON cache, not media, and it must exist before any network does.
-            playlistCacheFile = File(filesDir, "playlist-cache.json")
+            playlistCacheFile = File(filesDir, "playlist-cache.json"),
+            web = mediaWebSurface
         )
         val host = MediaPlayerHost(
             this,
@@ -228,6 +265,13 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // Install the observer before the first load when media mode is already
         // on; the origin gate means a non-QMS home page is untouched.
         applyQmsScriptOnMain(force = true)
+        // attach() has now applied the persisted settings, including
+        // applyDefaultSource(), which can open the web page and change what the
+        // band shows. End the startup path with a QMS probe: a page that was
+        // already loaded must never be left unstyled or unprobed. Before the
+        // first load this is a no-op; onWebPageFinished probes again once the
+        // document commits.
+        reprobeQmsOnLoadedPage()
 
         auth = AuthManager(
             config = config,
@@ -316,6 +360,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     override fun onResume() {
         super.onResume()
         webViewController.resume()
+        // Only resume a page that is actually on screen: hide() paused it
+        // because another source took the band, and resuming it here would
+        // restart its timers and audio behind that source.
+        if (::mediaWebSurface.isInitialized && mediaWebSurface.isShowing) mediaWebSurface.resume()
         mediaController.lifecycle(false)
         // A file pushed with `adb` while the app is in the foreground must
         // appear without a settings change; the controller re-reads the folder
@@ -326,6 +374,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     override fun onPause() {
         webViewController.pause()
+        if (::mediaWebSurface.isInitialized) mediaWebSurface.pause()
         mediaController.lifecycle(true)
         super.onPause()
     }
@@ -342,7 +391,31 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && config.fullscreen) enterImmersiveMode()
+        if (!hasFocus) return
+        // Re-applying immersive mode while the soft keyboard is up dismisses
+        // it again; the kiosk fullscreen is restored as soon as it is gone.
+        if (MediaWebPolicy.shouldReapplyImmersive(config.fullscreen, softKeyboardMayBeVisible())) {
+            enterImmersiveMode()
+        }
+    }
+
+    /**
+     * Whether the IME may be covering the window. API 30+ answers this
+     * directly from the window insets. Below 30 there is no reliable query, so
+     * the safe approximation is "the media page has focus in MEDIA_ONLY", the
+     * one place in the app where text is typed into a web page.
+     */
+    private fun softKeyboardMayBeVisible(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val insets = window.decorView.rootWindowInsets ?: return false
+            return insets.isVisible(WindowInsets.Type.ime())
+        }
+        return ::mediaController.isInitialized &&
+            ::mediaWebSurface.isInitialized &&
+            config.mediaSettings.enabled &&
+            mediaController.currentMode() == MediaMode.MEDIA_ONLY &&
+            mediaController.isWebSource() &&
+            mediaWebSurface.hasPageFocus()
     }
 
     override fun onDestroy() {
@@ -358,8 +431,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         networkCallback = null
         cancelRetry()
         wsHub.closeAll()
-        // The controller releases the player and the bitmap; the WebView must
-        // outlive it, because a release callback can still touch the overlays.
+        // The controller releases the player and the bitmap. The media WebView
+        // is destroyed first, in the same order the QMS WebView is detached, so
+        // no release callback can touch a dead renderer.
+        if (::mediaWebSurface.isInitialized) mediaWebSurface.destroy()
         mediaController.release()
         webViewController.detach()
         MainThreadBridge.host = null
@@ -424,7 +499,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaPlayPauseButton = findViewById(R.id.menu_media_play_pause)
         menuMediaNextButton = findViewById(R.id.menu_media_next)
         menuMediaUrlButton = findViewById(R.id.menu_media_url)
+        menuMediaWebButton = findViewById(R.id.menu_media_web)
         menuMediaModeButton = findViewById(R.id.menu_media_mode)
+        menuMediaKeyboardButton = findViewById(R.id.menu_media_keyboard)
+        menuMediaBanner = findViewById(R.id.menu_media_banner)
         menuSettingsButton = findViewById(R.id.menu_settings)
         menuDeviceButton = findViewById(R.id.menu_device_info)
         menuExitButton = findViewById(R.id.menu_exit)
@@ -478,7 +556,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             hideMenu()
         }
         menuMediaUrlButton.setOnClickListener { showMediaUrlDialog() }
+        menuMediaWebButton.setOnClickListener { showMediaWebDialog() }
         menuMediaModeButton.setOnClickListener { cycleMediaMode() }
+        menuMediaKeyboardButton.setOnClickListener { showMediaKeyboard() }
         menuSettingsButton.setOnClickListener {
             hideMenu()
             showInfoOverlay(issueNewPin = auth.currentPin() == null)
@@ -689,6 +769,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // too, since its custom view is appended above every overlay.
         if (customView != null) hideCustomView()
         if (deviceOverlay.visibility == View.VISIBLE) hideDeviceOverlay()
+        menuMediaBanner.visibility = View.GONE
         menuOverlay.visibility = View.VISIBLE
         syncMediaOverlay()
         menuHomeButton.requestFocus()
@@ -727,30 +808,42 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     /**
      * Enter URL dialog (spec §16). Works with both touch and a D-pad/keyboard:
      * the field is a normal focusable `EditText` and the three actions are
-     * focusable buttons. The URL goes through [UrlValidator] via
+     * focusable buttons. By default the URL goes through [UrlValidator] via
      * [WebViewController.navigate] (a missing scheme is upgraded to https, and
      * a non-http(s) scheme is refused), so it behaves exactly like the REST
      * path. The dialog stays open with an inline error until the URL is valid.
+     *
+     * [onOpen], when supplied, replaces the navigation with that callback and
+     * hides "Open + Set as Home": the media web source reuses this dialog but
+     * is not a page for the QMS WebView.
      */
-    private fun showEnterUrlDialog() {
+    private fun showEnterUrlDialog(onOpen: ((String) -> Boolean)? = null) {
         hideMenu()
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             hint = "https://example.com"
         }
-        val dialog = AlertDialog.Builder(this)
+        val builder = AlertDialog.Builder(this)
             .setTitle(R.string.enter_url_title)
             .setView(input)
             .setPositiveButton(R.string.open, null)
-            .setNeutralButton(R.string.open_set_home, null)
             .setNegativeButton(R.string.cancel, null)
-            .create()
+        if (onOpen == null) builder.setNeutralButton(R.string.open_set_home, null)
+        val dialog = builder.create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                submitEnteredUrl(dialog, input, setHome = false)
+                if (onOpen == null) {
+                    submitEnteredUrl(dialog, input, setHome = false)
+                } else if (onOpen(input.text.toString())) {
+                    dialog.dismiss()
+                } else {
+                    input.error = "Invalid URL"
+                }
             }
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                submitEnteredUrl(dialog, input, setHome = true)
+            if (onOpen == null) {
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                    submitEnteredUrl(dialog, input, setHome = true)
+                }
             }
         }
         dialog.setOnDismissListener {
@@ -761,6 +854,28 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         dialogVisible = true
         syncMediaOverlay()
         dialog.show()
+    }
+
+    /**
+     * "Open web in media": the same dialog and validation as Enter URL, but the
+     * result opens in the media band's web renderer rather than navigating the
+     * QMS page.
+     */
+    private fun showMediaWebDialog() {
+        showEnterUrlDialog { raw ->
+            when (val validated = UrlValidator.validate(raw)) {
+                is UrlValidator.Result.Invalid -> false
+                is UrlValidator.Result.Valid -> {
+                    val opened = mediaController.openWeb(validated.url)
+                    if (opened) {
+                        applyMediaLayoutOnMain()
+                        seq.incrementAndGet()
+                        broadcastState()
+                    }
+                    opened
+                }
+            }
+        }
     }
 
     /**
@@ -831,7 +946,40 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaPlayPauseButton.visibility = visibility
         menuMediaNextButton.visibility = visibility
         menuMediaUrlButton.visibility = visibility
+        menuMediaWebButton.visibility = visibility
         menuMediaModeButton.visibility = visibility
+        // The soft keyboard is only useful where the page owns the D-pad and
+        // the IME; SPLIT leaves the page inert on purpose.
+        val keyboardVisibility = if (
+            config.mediaSettings.enabled &&
+            mediaController.currentMode() == MediaMode.MEDIA_ONLY &&
+            mediaController.isWebSource()
+        ) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
+        menuMediaKeyboardButton.visibility = keyboardVisibility
+    }
+
+    /**
+     * On-device fallback for a Jellyfin login field on a television with no
+     * usable remote keyboard. The page must have focus before the IME is asked
+     * for it, so the menu closes first. A device with no IME at all is told so
+     * in the menu banner rather than silently doing nothing.
+     */
+    private fun showMediaKeyboard() {
+        val page = mediaWebSurface.view
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        if (page == null || imm == null || imm.inputMethodList.isNullOrEmpty()) {
+            menuMediaBanner.setText(R.string.menu_media_keyboard_unavailable)
+            menuMediaBanner.visibility = View.VISIBLE
+            return
+        }
+        hideMenu()
+        page.requestFocus()
+        // Let the menu's dismissal settle before the IME is raised.
+        page.post { imm.showSoftInput(page, InputMethodManager.SHOW_FORCED) }
     }
 
     private fun submitEnteredUrl(dialog: AlertDialog, input: EditText, setHome: Boolean) {
@@ -915,15 +1063,24 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     }
 
     /**
-     * Returns focus to whatever the current mode shows. In `MEDIA_ONLY` the
-     * WebView is hidden, so focus goes to the media container; requesting it on
-     * a gone WebView would leave the D-pad with nowhere to land.
+     * Returns focus to whatever the current mode shows. In `MEDIA_ONLY` the QMS
+     * WebView is hidden, so focus goes to the media band; requesting it on a
+     * gone WebView would leave the D-pad with nowhere to land.
+     *
+     * A page owns the band rather than the container, so focus must be given to
+     * the page itself — this runs on every overlay/dialog dismissal, including
+     * the one right after "Open web in media", and landing on the container
+     * would swallow the first OK press.
      */
     private fun restoreContentFocus() {
         val mediaOnly = config.mediaSettings.enabled &&
             mediaController.currentMode() == MediaMode.MEDIA_ONLY
         if (mediaOnly && !anyOverlayVisible()) {
-            mediaContainer.requestFocus()
+            if (mediaController.isWebSource()) {
+                mediaController.refocusWeb()
+            } else {
+                mediaContainer.requestFocus()
+            }
         } else {
             webViewController.requestWebFocus()
         }
@@ -940,11 +1097,26 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         } else {
             MediaMode.QMS_ONLY
         }
+        // A fullscreen view only makes sense while the band owns the screen: a
+        // QMS_FOCUS takeover (or leaving the web source) must hide it first,
+        // exactly like showMenu() does for the QMS custom view.
+        if (mediaFullscreenView != null &&
+            !MediaWebPolicy.allowsMediaFullscreen(
+                config.mediaSettings.enabled,
+                mediaController.isWebSource(),
+                mode
+            )
+        ) {
+            hideMediaFullscreen()
+        }
         val mediaParams = mediaContainer.layoutParams as FrameLayout.LayoutParams
         val webParams = webViewContainer.layoutParams as FrameLayout.LayoutParams
 
         // Baseline: both surfaces full screen; a mode then overrides the one it
         // does not use, so no stale height can leak across a mode change.
+        val previousMode = lastMediaMode
+        lastMediaMode = mode
+
         mediaParams.width = FrameLayout.LayoutParams.MATCH_PARENT
         mediaParams.height = FrameLayout.LayoutParams.MATCH_PARENT
         mediaParams.topMargin = 0
@@ -978,6 +1150,23 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         }
         mediaContainer.layoutParams = mediaParams
         webViewContainer.layoutParams = webParams
+
+        // Focus follows the visible surface. Leaving the workspace hides the
+        // media band, and the D-pad must go back to the QMS page rather than to
+        // a gone view; entering it puts focus on the band (the page itself when
+        // one is open). An overlay keeps its own focus.
+        if (previousMode != mode && !anyOverlayVisible()) {
+            if (mode == MediaMode.MEDIA_ONLY) {
+                if (mediaController.isWebSource()) {
+                    mediaController.refocusWeb()
+                } else {
+                    mediaContainer.requestFocus()
+                }
+            } else if (previousMode == MediaMode.MEDIA_ONLY) {
+                webViewController.requestWebFocus()
+            }
+        }
+        updateMediaMenuVisibility()
     }
 
     // ---------------------------------------------------------------------
@@ -1032,7 +1221,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 true
             }
             BackOrder.Action.HIDE_FULLSCREEN -> {
-                hideCustomView()
+                if (mediaFullscreenView != null) hideMediaFullscreen() else hideCustomView()
                 true
             }
             // Back inside the media workspace: leave it. Without this rung the
@@ -1080,7 +1269,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun backState(): BackOrder.BackState = BackOrder.BackState(
         infoOverlayVisible = infoOverlay.visibility == View.VISIBLE,
         errorOverlayVisible = errorOverlay.visibility == View.VISIBLE,
-        fullscreenVisible = customView != null,
+        fullscreenVisible = customView != null || mediaFullscreenView != null,
         canGoBack = webViewController.canGoBackOnMain(),
         atHome = HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl),
         menuVisible = menuOverlay.visibility == View.VISIBLE,
@@ -1238,6 +1427,77 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     }
 
     // ---------------------------------------------------------------------
+    // MediaWebFullscreenHost — the media band's HTML5 fullscreen
+    // ---------------------------------------------------------------------
+
+    /**
+     * Adds the page's fullscreen view inside `media_container`, above the
+     * media WebView. It is band-scoped by construction: in `MEDIA_ONLY` the
+     * band is the whole screen (real fullscreen); in `SPLIT` it fills only the
+     * media band, leaving the queue visible.
+     */
+    override fun onMediaShowFullscreen(
+        view: View,
+        callback: WebChromeClient.CustomViewCallback
+    ): Boolean {
+        if (mediaFullscreenView != null) return false
+        if (!MediaWebPolicy.allowsMediaFullscreen(
+                config.mediaSettings.enabled,
+                mediaController.isWebSource(),
+                mediaController.currentMode()
+            )
+        ) {
+            return false
+        }
+        mediaFullscreenView = view
+        mediaFullscreenCallback = callback
+        view.setBackgroundColor(Color.BLACK)
+        mediaContainer.addView(
+            view,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        // The page is paused visually, not in the media sense: it must keep
+        // running behind the fullscreen video.
+        mediaWebSurface.hideForFullscreen()
+        return true
+    }
+
+    override fun onMediaHideFullscreen() {
+        hideMediaFullscreen(notifyPage = true)
+    }
+
+    override fun onMediaFullscreenGone() {
+        hideMediaFullscreen(notifyPage = false)
+    }
+
+    /**
+     * Removes the stored fullscreen view. [notifyPage] is false when the page
+     * (or its renderer) is already gone, where calling back would touch a dead
+     * WebView.
+     */
+    private fun hideMediaFullscreen(notifyPage: Boolean = true) {
+        val view = mediaFullscreenView ?: return
+        mediaContainer.removeView(view)
+        mediaFullscreenView = null
+        val callback = mediaFullscreenCallback
+        mediaFullscreenCallback = null
+        if (notifyPage) {
+            try {
+                callback?.onCustomViewHidden()
+            } catch (e: Exception) {
+                // The renderer died between the request and the hide.
+            }
+        }
+        // The page owns the band again unless another source has taken it.
+        if (::mediaWebSurface.isInitialized && mediaController.isWebSource()) {
+            mediaWebSurface.restoreAfterFullscreen()
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // WebViewController.Listener
     // ---------------------------------------------------------------------
 
@@ -1261,7 +1521,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // onPageLoaded() then would immediately undo the page failure the error
         // page just recorded (and revert the documented MEDIA_ONLY), so a load
         // is only a recovery when the page did not fail.
-        if (!pageHasError) mediaController.onPageLoaded()
+        if (!pageHasError) {
+            mediaController.onPageLoaded()
+            // Applying the persisted default source (or a mode change) must not
+            // leave the strip dependent on a probe that ran before the document
+            // committed. Re-request the probe on the loaded page, exactly like a
+            // settings save does.
+            reprobeQmsOnLoadedPage()
+        }
         broadcastState()
     }
 
@@ -1484,8 +1751,12 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
      * Plays an ad-hoc URL on the media band. The same [UrlValidator] as
      * `/api/nav/open`, so a non-http(s) value is `invalid_url`; the queue is
      * replaced by the single URL until another source is chosen.
+     *
+     * With [web] true the URL opens in the media band's web renderer instead:
+     * the result still reports the URL (a caller already supplied it), and the
+     * published state masks it.
      */
-    override fun openMediaUrl(url: String): ApiResult {
+    override fun openMediaUrl(url: String, web: Boolean): ApiResult {
         return when (val validated = UrlValidator.validate(url)) {
             is UrlValidator.Result.Invalid -> ApiResult.invalidUrl()
             is UrlValidator.Result.Valid -> {
@@ -1493,12 +1764,16 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                     return ApiResult.conflict("media_disabled", "Enable media mode first")
                 }
                 MainThreadBridge.post {
-                    mediaController.playUrl(validated.url)
+                    if (web) {
+                        mediaController.openWeb(validated.url)
+                    } else {
+                        mediaController.playUrl(validated.url)
+                    }
                     applyMediaLayoutOnMain()
                     seq.incrementAndGet()
                     broadcastState()
                 }
-                ApiResult.ok("url" to validated.url)
+                ApiResult.ok("url" to validated.url, "web" to web)
             }
         }
     }

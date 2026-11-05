@@ -100,9 +100,15 @@ class MediaFileRulesTest {
     @Test
     fun `an unknown or missing extension is refused`() {
         assertNull(MediaFileRules.sanitize("notes.txt"))
-        assertNull(MediaFileRules.sanitize("movie.mkv"))
         assertNull(MediaFileRules.sanitize("clip"))
         assertNull(MediaFileRules.sanitize("clip."))
+    }
+
+    @Test
+    fun `every supported container extension is accepted`() {
+        for (extension in listOf("mp4", "m4v", "mov", "mkv", "webm", "jpg", "jpeg", "png")) {
+            assertEquals("clip.$extension", MediaFileRules.sanitize("clip.$extension"))
+        }
     }
 
     @Test
@@ -139,6 +145,13 @@ class MediaFileRulesTest {
     fun `ftyp at the wrong offset is not video`() {
         val magic = bytes('f'.code, 't'.code, 'y'.code, 'p'.code, 0, 0, 0, 0)
         assertNull(MediaFileRules.kindOf(magic))
+    }
+
+    @Test
+    fun `the ebml header is video`() {
+        val magic = bytes(0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81)
+        assertEquals(MediaItem.Kind.VIDEO, MediaFileRules.kindOf(magic))
+        assertEquals(MediaFileRules.Container.EBML, MediaFileRules.containerOf(magic))
     }
 
     @Test
@@ -204,6 +217,28 @@ class MediaFileRulesTest {
         assertFalse(MediaFileRules.contentMatchesExtension("clip.mp4", ByteArray(0)))
     }
 
+    @Test
+    fun `mkv and webm require the ebml header`() {
+        val ebml = bytes(0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81)
+        assertTrue(MediaFileRules.contentMatchesExtension("clip.mkv", ebml))
+        assertTrue(MediaFileRules.contentMatchesExtension("clip.webm", ebml))
+    }
+
+    @Test
+    fun `an mkv whose magic is ftyp is refused`() {
+        val mp4 = bytes(0, 0, 0, 0, 'f'.code, 't'.code, 'y'.code, 'p'.code)
+        assertFalse(MediaFileRules.contentMatchesExtension("clip.mkv", mp4))
+        assertFalse(MediaFileRules.contentMatchesExtension("clip.webm", mp4))
+    }
+
+    @Test
+    fun `an mp4 whose magic is ebml is refused`() {
+        val ebml = bytes(0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81)
+        assertFalse(MediaFileRules.contentMatchesExtension("clip.mp4", ebml))
+        assertFalse(MediaFileRules.contentMatchesExtension("clip.m4v", ebml))
+        assertFalse(MediaFileRules.contentMatchesExtension("clip.mov", ebml))
+    }
+
     // ------------------------------------------------------------------
     // contentTypeOf
     // ------------------------------------------------------------------
@@ -211,6 +246,10 @@ class MediaFileRulesTest {
     @Test
     fun `content types follow the extension`() {
         assertEquals("video/mp4", MediaFileRules.contentTypeOf("a.mp4"))
+        assertEquals("video/mp4", MediaFileRules.contentTypeOf("a.M4V"))
+        assertEquals("video/quicktime", MediaFileRules.contentTypeOf("a.mov"))
+        assertEquals("video/x-matroska", MediaFileRules.contentTypeOf("a.mkv"))
+        assertEquals("video/webm", MediaFileRules.contentTypeOf("a.webm"))
         assertEquals("image/jpeg", MediaFileRules.contentTypeOf("a.jpg"))
         assertEquals("image/jpeg", MediaFileRules.contentTypeOf("a.JPEG"))
         assertEquals("image/png", MediaFileRules.contentTypeOf("a.png"))

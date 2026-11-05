@@ -65,8 +65,12 @@ interface ControllerHost {
     /** Called after the persisted media settings change, so the mode is re-derived. */
     fun onMediaSettingsChanged()
 
-    /** Plays an ad-hoc URL on the media band; `invalid_url` for a non-http(s) value. */
-    fun openMediaUrl(url: String): ApiResult
+    /**
+     * Plays an ad-hoc URL on the media band; `invalid_url` for a non-http(s)
+     * value. With [web] true it is opened as a web page in the media band's
+     * second renderer instead of the native player.
+     */
+    fun openMediaUrl(url: String, web: Boolean = false): ApiResult
 
     /**
      * Queue/playback control used by the MQTT actions. Each is a no-op with a

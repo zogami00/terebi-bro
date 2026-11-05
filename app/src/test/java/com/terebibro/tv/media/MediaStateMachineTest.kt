@@ -79,6 +79,21 @@ class MediaStateMachineTest {
     }
 
     @Test
+    fun `a media playback error never changes qms detection`() {
+        // The media band's web-load failure is published as a PlaybackError;
+        // that must leave the QMS strip's evidence untouched. The media source
+        // and QMS detection share no "unavailable" flag.
+        var state = reduce(split(), MediaEvent.QmsProbe(true))
+        state = reduce(state, MediaEvent.PlaybackError("media_web_load_failed"))
+
+        assertEquals(MediaMode.SPLIT, state.mode)
+        assertTrue(state.qmsMatched)
+        assertTrue(state.qmsDetectionHealthy)
+        assertTrue(state.qmsAvailable)
+        assertEquals("media_web_load_failed", state.lastError)
+    }
+
+    @Test
     fun `a page-level failure at launch degrades qms only to media only`() {
         val state = reduce(MediaState(), MediaEvent.Enabled(true))
         assertEquals(MediaMode.QMS_ONLY, state.mode)

@@ -57,6 +57,15 @@ object MediaSettingsValidator {
         val locationSelector = (update.qmsLocationSelector ?: current.qmsLocationSelector).trim()
         val timeSelector = (update.qmsTimeSelector ?: current.qmsTimeSelector).trim()
         val playlistUrl = (update.playlistUrl ?: current.playlistUrl).trim()
+        // A blank web URL keeps the stored value, the same semantics the MQTT
+        // password uses: `GET /api/settings/media` only ever returns the masked
+        // URL, so an untouched field must not overwrite the real one. There is
+        // no clearing path; switching the startup source away from `web` (and
+        // `mediaWebEnabled` off) is how a page is turned off.
+        val mediaWebUrl = update.mediaWebUrl
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: current.mediaWebUrl.trim()
 
         val callSource = update.callSource?.let { wire ->
             CallSource.fromWire(wire.trim())
@@ -76,6 +85,14 @@ object MediaSettingsValidator {
                 )
         } ?: current.mediaFillMode
 
+        val mediaSourceDefault = update.mediaSourceDefault?.let { wire ->
+            MediaSourceDefault.fromWire(wire.trim())
+                ?: return Result.Invalid(
+                    "mediaSourceDefault",
+                    "mediaSourceDefault must be local, playlist or web"
+                )
+        } ?: current.mediaSourceDefault
+
         selector(stripSelector, "qmsStripSelector")?.let { return it }
         selector(numberSelector, "qmsNumberSelector")?.let { return it }
         selector(locationSelector, "qmsLocationSelector")?.let { return it }
@@ -88,6 +105,18 @@ object MediaSettingsValidator {
         val normalisedPlaylistUrl = when (val parsed = urlOrNull(playlistUrl, "playlistUrl")) {
             is UrlCheck.Invalid -> return parsed.result
             is UrlCheck.Valid -> parsed.value
+        }
+        val normalisedWebUrl = when (val parsed = urlOrNull(mediaWebUrl, "mediaWebUrl")) {
+            is UrlCheck.Invalid -> return parsed.result
+            is UrlCheck.Valid -> parsed.value
+        }
+        // A web default is meaningless without a page to open; name the field
+        // the operator chose so the error lands under the select.
+        if (mediaSourceDefault == MediaSourceDefault.WEB && normalisedWebUrl.isEmpty()) {
+            return Result.Invalid(
+                "mediaSourceDefault",
+                "mediaSourceDefault cannot be web without a mediaWebUrl"
+            )
         }
 
         val dwellSec = update.dwellSec ?: current.dwellSec
@@ -170,6 +199,9 @@ object MediaSettingsValidator {
                 playlistEnabled = playlistEnabled(update, current),
                 playlistUrl = normalisedPlaylistUrl,
                 playlistRefreshSec = playlistRefreshSec,
+                mediaWebUrl = normalisedWebUrl,
+                mediaWebEnabled = update.mediaWebEnabled ?: current.mediaWebEnabled,
+                mediaSourceDefault = mediaSourceDefault,
                 imageDurationSec = imageDurationSec,
                 volumePercent = volumePercent,
                 mediaFillMode = mediaFillMode,

@@ -277,6 +277,16 @@
             android:orientation="vertical"
             android:padding="32dp">
 
+            <!-- Menu-scoped message line (e.g. no IME on this TV). -->
+            <TextView
+                android:id="@+id/menu_media_banner"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:textSize="18sp"
+                android:textColor="#FFD166"
+                android:visibility="gone" />
+
             <Button
                 android:id="@+id/menu_home"
                 android:layout_width="wrap_content"
@@ -329,12 +339,28 @@
                 android:text="@string/menu_media_url" />
 
             <Button
+                android:id="@+id/menu_media_web"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_web" />
+
+            <Button
                 android:id="@+id/menu_media_mode"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:visibility="gone"
                 android:text="@string/menu_media_mode" />
+
+            <Button
+                android:id="@+id/menu_media_keyboard"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_keyboard" />
 
             <Button
                 android:id="@+id/menu_settings"

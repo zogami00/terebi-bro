@@ -138,6 +138,10 @@ object MediaPlaylist {
         val kind = when (type) {
             "image" -> MediaItem.Kind.IMAGE
             "video" -> MediaItem.Kind.VIDEO
+            // Web is a deliberate single source, never a queue entry: a `web`
+            // entry is skipped exactly like an unknown type, so the playlist
+            // stays a file loop.
+            "web" -> return null
             else -> return null
         }
 

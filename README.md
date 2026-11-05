@@ -271,6 +271,16 @@ form, and reaches `split` only once the dashboard is actually rendering. A
 renderer crash or a WebView restart resets that history, because the reload
 lands on the activation page again.
 
+Installing the script against a page that is **already loading or loaded**
+evaluates it once immediately, on both the document-start and fallback paths.
+The document-start handler only reaches documents created after it is installed,
+so without that immediate evaluation enabling media mode on a live page (or a
+startup ordering where the load began first) would leave the strip unprobed
+until a manual reload. The script's own install guard makes the second run
+harmless, and its observer plus one-second re-probe cover a document that was
+evaluated before its cards rendered. A WebView restart re-installs the script
+before the new load, so it too needs no manual reload.
+
 ### The strip
 
 The queue band is a restyle of the vendor page's own nodes, not a copy of its
@@ -339,8 +349,12 @@ visible to the queue. The caps are fixed constants, not settings:
 | Concurrency | 3 uploads |
 | Rate | 6/min per token |
 
-Magic bytes must match the extension (MP4 `ftyp`, JPEG SOI, PNG signature).
-**That is the gate** — a JPEG renamed `.mp4` is refused here. The
+Magic bytes must match the extension. Accepted containers are MP4/M4V/MOV
+(`ftyp` at offset 4), Matroska/WebM (the EBML header `1A 45 DF A3`), JPEG SOI
+and the PNG signature — `.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`, `.jpg`,
+`.jpeg` and `.png`. **That is the gate** — a JPEG renamed `.mp4` is refused
+here, and so is an MP4 renamed `.mkv`: the container family must agree with the
+extension, not just the playable kind. The
 `MediaMetadataRetriever` check is **advisory only** and never refuses the upload:
 the retriever cannot introspect every valid container on every device (the API 28
 emulator rejects a good H.264/AAC MP4), and refusing a valid file is worse than
@@ -370,6 +384,83 @@ playlist has nothing playable" and the local folder takes over. **Playlist or
 local folder, never both**: the playlist wins only when it is enabled and has at
 least one valid entry, and the two are never merged or interleaved. An ad-hoc
 URL (`POST /api/media/open`) replaces the queue until another source is chosen.
+An **`.m3u8` (HLS) URL** can be used directly in the playlist or in "Play from
+URL": it is handed to the platform `MediaPlayer`, which handles HLS on this
+range, and whether it actually plays depends on the stream's codecs.
+
+### Web pages in the media band
+
+The media band can also host a **web page** — a Jellyfin UI, a YouTube page,
+any `http`/`https` site — as a fourth source beside the folder, the playlist and
+an ad-hoc URL. It is opened from the controller's Media card (**Open in media**),
+from the on-device menu (**Open web in media**), or with
+`POST /api/media/open {"url": "...", "web": true}`. Omitted or `false` keeps the
+native player path.
+
+- It is a **second renderer** (a separate `WebView` from the QMS page), so it
+  costs the memory of a second Chromium instance while it is alive. It is built
+  lazily on first use and reused afterwards.
+- It needs a **modern system WebView**. The QMS page's minimum (Chromium 66) is
+  enough to load a page, but a modern Jellyfin or YouTube client will behave
+  poorly on an old one.
+- Autoplay **depends on the site**: the app asks for no user-gesture requirement,
+  but a page can still refuse to start media on its own.
+- A web page is a **single deliberate source, not a queue item**: the playlist
+  parser rejects `type: "web"` entries, next/previous do nothing while a page is
+  open, and the published `mediaSource` is `web` with a count of 0.
+- The band's **pause contract reaches the page**: an overlay, `QMS_FOCUS`,
+  `qms_only` or `POST /api/media/pause` (the MQTT action and the HA button use
+  it) pauses the page's media clock, and `mediaPaused` reflects what it is
+  doing. A page that is hidden because another source took the band stays
+  paused; it is not resumed on the next foregrounding.
+- A page that **fails to load** (main-frame error or a dead renderer) is
+  dropped: the error is published and the folder or playlist takes over, so
+  clearing the web setting — or toggling media mode — is never needed to
+  recover. A persisted startup page that the settings no longer select is
+  dropped the same way.
+- The URL is **masked before it leaves the app**. `mediaItem` in the state
+  broadcast keeps only `scheme://host[:port]/path`; the query and fragment
+  (where a Jellyfin or YouTube token lives) are stripped, and nothing logs the
+  raw URL. `GET /api/settings/media` returns `mediaWebUrl` the same way, plus a
+  `mediaWebUrlSet` boolean, so the stored URL itself never crosses the wire —
+  the convention `/api/settings/mqtt` follows for `mqttPasswordSet`.
+- The **D-pad only reaches the page in `media_only`**. In `split` the media
+  WebView is not focusable, so the remote keeps driving the QMS page; switch to
+  `media_only` to navigate the page.
+- **HTML5 fullscreen is band-scoped.** A YouTube/Jellyfin fullscreen request is
+  honoured by adding the page's own fullscreen view inside the media band
+  (`media_container`), above the page, with a black background; the page is
+  hidden while it shows. It is **never** routed through the QMS WebView's
+  fullscreen path, which swaps into the whole screen. In `media_only` the band
+  *is* the whole screen, so the result is real fullscreen; in `split` the view
+  fills only the media band and the queue stays visible, which is intended. Back
+  leaves the video before it leaves the workspace, and a `QMS_FOCUS` takeover
+  (or another source taking the band) removes the fullscreen view first. A
+  renderer crash clears the stored view and callback so a dead view is never
+  left attached.
+- **Typing needs an IME.** `windowSoftInputMode` is `adjustResize`, and the
+  activity no longer re-applies immersive mode while the soft keyboard is up
+  (API 30+ reads `WindowInsets.Type.ime()`; below 30 it treats a focused media
+  page in `media_only` as the conservative case). The page is focusable and
+  touches focus in `media_only`. The on-device menu also has **Show keyboard**
+  (only in `media_only` with a web page open), which raises the IME with
+  `SHOW_FORCED` and says so in the menu banner when the device has no IME at
+  all. **On a television the reliable path is Jellyfin's Quick Connect, or a
+  USB/Bluetooth keyboard** — a soft keyboard depends on the device having an IME
+  installed and selectable in the first place.
+- Cookies and DOM storage are enabled (defaults) so a Jellyfin login survives
+  for the process lifetime. The media view has **no JavaScript bridge at all**;
+  the QMS view exposes only `terebiQms`, the write-only signal sink. Non-`http(s)`
+  navigation, SSL errors, permission requests and console logging are refused.
+- The page can be the **persisted startup source**: `mediaWebUrl` stores the
+  link in full (a Jellyfin URL may carry a token), `mediaWebEnabled` opens it on
+  startup, and `mediaSourceDefault = web` makes it the default source. The
+  controller applies that default once at startup and again when those settings
+  change, but never over a source the operator chose during the session. A `web`
+  default without a URL is rejected naming `mediaSourceDefault`. A blank
+  `mediaWebUrl` in a `POST` **keeps the stored URL** (leave the controller field
+  blank to keep it), so there is no clearing path: turn `mediaWebEnabled` off or
+  move `mediaSourceDefault` away from `web` instead.
 
 ### Settings and defaults
 
@@ -390,6 +481,9 @@ whole, so one bad value writes nothing.
 | `imageDurationSec` | `10` | 3–120; applies to stills. |
 | `mediaLocalEnabled` | `true` | The local folder as a source. |
 | `playlistEnabled` / `playlistUrl` / `playlistRefreshSec` | `false` / empty / `300` | Off until a URL is configured. |
+| `mediaWebUrl` | empty | The web page the media band can show; `http`/`https` only, stored in full (it may carry a token). Read back masked; a blank `POST` value keeps the stored one. |
+| `mediaWebEnabled` | `false` | Open `mediaWebUrl` on startup instead of the folder/playlist. |
+| `mediaSourceDefault` | `local` | `local`, `playlist` or `web`; `web` requires `mediaWebUrl`. |
 | `volumePercent` | `100` | 0–100; a waiting room will usually want 0. |
 | `uiLanguage` | `ms` | `ms`, `en`, `zh` or `ta` — patient-facing labels only. |
 | `mediaFillMode` | `letterboxBlur` | `letterboxBlur`, `letterbox` or `cover` (the only mode that crops). |
@@ -406,13 +500,15 @@ A density-scaled 4K panel reports 1080 dp, so the factor is `1.0` and nothing
 changes; a device reporting native dp at 4K gets `2.0` and the same picture,
 larger. There is no second 4K design.
 
-**Limitations, stated plainly.** The media band plays **MP4 (H.264/AAC),
-JPEG and PNG** only. There is no HLS, no HEVC and no seeking; HEVC needs a
-hardware decoder the app cannot supply, and HLS would require a different player
-(`androidx.media3`). A chime played by a native app on the TV is invisible to the
-WebView. The strip depends on the vendor page's structure: if it changes, the
-strip degrades to "queue board unavailable" rather than guess. And nothing in
-this section has been verified on a device yet — see
+**Limitations, stated plainly.** The media band plays the containers the
+platform's `MediaPlayer` decodes: **MP4/M4V/MOV, Matroska/WebM, JPEG and PNG**
+(API 28+). **HEVC and MKV still need Media3** (`androidx.media3`) — the MKV
+*container* now plays, but an HEVC track inside it does, and an HEVC MP4 does
+not; Media3 is out of scope for this band, and opening a web page does not change
+that. There is no seeking. A chime played by a native app on the TV is invisible
+to the WebView. The strip depends on the vendor page's structure: if it changes,
+the strip degrades to "queue board unavailable" rather than guess. And nothing
+in this section has been verified on a device yet — see
 [Verification status](#verification-status).
 
 ## WebView version warning
@@ -477,9 +573,11 @@ the on-device **menu** with:
 
 The menu items are **Home**, **Reload**, **Refresh WebView** (the existing
 WebView restart), **Enter URL**, **Settings**, **Device information** and
-**Exit App**. **Back closes the menu** without acting on any item, and the menu
-never traps focus — a short Back press runs the normal Back ladder from wherever
-focus is.
+**Exit App**. In `media_only` with a web page open it also shows **Show
+keyboard**, which raises the device IME for that page (and reports in the menu
+banner when the TV has no IME at all). **Back closes the menu** without acting on
+any item, and the menu never traps focus — a short Back press runs the normal
+Back ladder from wherever focus is.
 
 **Enter URL** opens a dialog with a text field and **Open**,
 **Open + Set as Home** and **Cancel**. It is fully usable with both a
@@ -958,7 +1056,7 @@ real-hardware behaviour remains unverified.
 
 V2 is validated **at the JVM and build level only**:
 
-- `testDebugUnitTest` passes: **554 JVM tests, 0 failures, 1 skipped** (a symlink
+- `testDebugUnitTest` passes: **591 JVM tests, 0 failures, 1 skipped** (a symlink
   test skipped on Windows). This includes the media reducer and layout, the
   settings validator, the QMS call key, signal clamp and injected-script
   escaping, the media queue and playlist parser, the upload rules, the media
@@ -967,10 +1065,15 @@ V2 is validated **at the JVM and build level only**:
   (each button payload re-parsed through the real command parser), the
   `command/result` shape (an existing action still reports exactly
   `{"id":…,"ok":true}`, and a disabled media action adds only
-  `applied`/`reason`), and the chime rule (source gating, the 1 s DOM-call
+  `applied`/`reason`), the chime rule (source gating, the 1 s DOM-call
   debounce, and the `audio` source suppressing the DOM takeover while still
-  updating the strip text).
-- `lintDebug` runs with **0 errors**; its 34 warnings are pre-existing
+  updating the strip text), the media-web policy (band-scoped fullscreen is
+  allowed only in `media_only`/`split` with a web source, and immersive mode is
+  not re-applied while the keyboard is up), the independence guard that a
+  media playback error cannot change `qmsDetectionHealthy`, `qmsMatched` or
+  `qmsAvailable`, and the QMS install predicate (an already-started page is
+  evaluated immediately, with or without document-start support).
+- `lintDebug` runs with **0 errors**; its 35 warnings are pre-existing
   (`setText` literals and dependency-version notices in `MainActivity`, plus
   manifest and resource warnings), and there are no new warnings in the media or
   MQTT code.

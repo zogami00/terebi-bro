@@ -38,6 +38,9 @@ object MediaSettingsRecovery {
         const val PLAYLIST_ENABLED = "mediaPlaylistEnabled"
         const val PLAYLIST_URL = "mediaPlaylistUrl"
         const val PLAYLIST_REFRESH_SEC = "mediaPlaylistRefreshSec"
+        const val WEB_URL = "mediaWebUrl"
+        const val WEB_ENABLED = "mediaWebEnabled"
+        const val SOURCE_DEFAULT = "mediaSourceDefault"
         const val IMAGE_DURATION_SEC = "mediaImageDurationSec"
         const val VOLUME_PERCENT = "mediaVolumePercent"
         const val FILL_MODE = "mediaFillMode"
@@ -114,6 +117,11 @@ object MediaSettingsRecovery {
                 raw, Keys.PLAYLIST_REFRESH_SEC, d.playlistRefreshSec,
                 MediaSettingsValidator.MIN_PLAYLIST_REFRESH_SEC, MediaSettingsValidator.MAX_PLAYLIST_REFRESH_SEC
             ),
+            mediaWebUrl = string(raw, Keys.WEB_URL, d.mediaWebUrl),
+            mediaWebEnabled = bool(raw, Keys.WEB_ENABLED, d.mediaWebEnabled),
+            mediaSourceDefault = MediaSourceDefault.fromWire(
+                string(raw, Keys.SOURCE_DEFAULT, d.mediaSourceDefault.wire)
+            ) ?: d.mediaSourceDefault,
             imageDurationSec = int(
                 raw, Keys.IMAGE_DURATION_SEC, d.imageDurationSec,
                 MediaSettingsValidator.MIN_IMAGE_DURATION_SEC, MediaSettingsValidator.MAX_IMAGE_DURATION_SEC
@@ -161,6 +169,12 @@ object MediaSettingsRecovery {
                     stripHeightPercent = defaults.stripHeightPercent
                 )
             }
+        }
+
+        // A stored `web` default with no stored URL cannot be honoured; fall
+        // back to this field's default only, leaving every other setting alone.
+        if (result.mediaSourceDefault == MediaSourceDefault.WEB && result.mediaWebUrl.isBlank()) {
+            result = result.copy(mediaSourceDefault = MediaSettings().mediaSourceDefault)
         }
 
         return result

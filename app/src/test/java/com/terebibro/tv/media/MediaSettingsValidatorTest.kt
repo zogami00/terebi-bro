@@ -48,6 +48,9 @@ class MediaSettingsValidatorTest {
         playlistEnabled = true,
         playlistUrl = "https://example.com/list.json",
         playlistRefreshSec = 600,
+        mediaWebUrl = "https://jellyfin.example/web?token=abc",
+        mediaWebEnabled = true,
+        mediaSourceDefault = MediaSourceDefault.WEB,
         imageDurationSec = 20,
         volumePercent = 70,
         mediaFillMode = MediaFillMode.COVER,
@@ -84,6 +87,9 @@ class MediaSettingsValidatorTest {
         assertEquals(current.playlistEnabled, settings.playlistEnabled)
         assertEquals(current.playlistUrl, settings.playlistUrl)
         assertEquals(current.playlistRefreshSec, settings.playlistRefreshSec)
+        assertEquals(current.mediaWebUrl, settings.mediaWebUrl)
+        assertEquals(current.mediaWebEnabled, settings.mediaWebEnabled)
+        assertEquals(current.mediaSourceDefault, settings.mediaSourceDefault)
         assertEquals(current.imageDurationSec, settings.imageDurationSec)
         assertEquals(current.volumePercent, settings.volumePercent)
         assertEquals(current.mediaFillMode, settings.mediaFillMode)
@@ -436,5 +442,74 @@ class MediaSettingsValidatorTest {
         assertEquals(true, settings.enabled)
         assertEquals(false, settings.mediaLocalEnabled)
         assertEquals(false, settings.newCallHighlight)
+    }
+
+    // ------------------------------------------------------- persisted web source
+
+    @Test
+    fun `a web startup source without a url is rejected naming the field`() {
+        val result = invalid(MediaUpdate(mediaSourceDefault = "web"))
+        assertEquals("mediaSourceDefault", result.field)
+        assertTrue(result.message.contains("mediaWebUrl"))
+    }
+
+    @Test
+    fun `a non-http web url is rejected naming the url field`() {
+        assertEquals(
+            "mediaWebUrl",
+            invalid(MediaUpdate(mediaWebUrl = "javascript:alert(1)")).field
+        )
+        assertEquals(
+            "mediaWebUrl",
+            invalid(MediaUpdate(mediaWebUrl = "ftp://example.com/page")).field
+        )
+    }
+
+    @Test
+    fun `a blank web url keeps the stored one`() {
+        // GET only returns the URL masked, so an untouched controller field
+        // posts blank; that must keep the real value, like the MQTT password.
+        val current = MediaSettings(mediaWebUrl = "https://jellyfin.example/web?token=x")
+        assertEquals(
+            "https://jellyfin.example/web?token=x",
+            valid(MediaUpdate(mediaWebUrl = "   "), current).mediaWebUrl
+        )
+        assertEquals(
+            "https://jellyfin.example/web?token=x",
+            valid(MediaUpdate(), current).mediaWebUrl
+        )
+        assertEquals(
+            "https://new.example/web",
+            valid(MediaUpdate(mediaWebUrl = " https://new.example/web "), current).mediaWebUrl
+        )
+    }
+
+    @Test
+    fun `a blank web url is allowed while the default is not web`() {
+        assertEquals("", valid(MediaUpdate(mediaWebUrl = "   ")).mediaWebUrl)
+        assertEquals(MediaSourceDefault.LOCAL, valid(MediaUpdate(mediaSourceDefault = "local")).mediaSourceDefault)
+        assertEquals(
+            MediaSourceDefault.PLAYLIST,
+            valid(MediaUpdate(mediaSourceDefault = "playlist")).mediaSourceDefault
+        )
+    }
+
+    @Test
+    fun `a web startup source with a valid url is accepted`() {
+        val settings = valid(
+            MediaUpdate(
+                mediaSourceDefault = "web",
+                mediaWebUrl = "https://jellyfin.example/web",
+                mediaWebEnabled = true
+            )
+        )
+        assertEquals(MediaSourceDefault.WEB, settings.mediaSourceDefault)
+        assertEquals("https://jellyfin.example/web", settings.mediaWebUrl)
+        assertTrue(settings.mediaWebEnabled)
+    }
+
+    @Test
+    fun `an unknown startup source is rejected naming the field`() {
+        assertEquals("mediaSourceDefault", invalid(MediaUpdate(mediaSourceDefault = "dvd")).field)
     }
 }
