@@ -8,11 +8,13 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import java.io.File
@@ -59,6 +61,81 @@ class MediaPlayerHost(
 
     private var player: MediaPlayer? = null
     private var bitmap: Bitmap? = null
+
+    /** The one holder this host ever attaches the video player to. */
+    private val surfaceHolder: SurfaceHolder = surfaceView.holder
+
+    /**
+     * Whether [surfaceHolder] currently has a live surface. A `SurfaceView`
+     * that is `GONE` has its surface destroyed, so a later `setDisplay` on that
+     * stale holder throws `IllegalArgumentException`. The flag is maintained by
+     * [surfaceCallback], which the framework invokes on the main thread.
+     */
+    private var surfaceReady = false
+
+    /**
+     * True while a player exists but has no display attached yet, i.e. it is
+     * waiting for `surfaceCreated` to hand it one. Starting such a player would
+     * play its audio with no picture, so [startIfPrepared] waits for the detach
+     * to clear instead.
+     */
+    private var displayPending = false
+
+    /** True once the player has prepared and may start as soon as a display is attached. */
+    private var prepared = false
+
+    /**
+     * The frame size the current video reported, or 0 before
+     * `onVideoSizeChanged` fires. The surface is letterboxed to exactly this
+     * aspect inside the band; the band itself is black, so the unused area is
+     * black bars rather than a stretched picture.
+     */
+    private var videoWidth = 0
+    private var videoHeight = 0
+
+    /**
+     * `setDisplay` is the only call that needs a live surface, and the surface
+     * can be destroyed and recreated at any time by `visibility` changes (the
+     * placeholder hides the view). Attaching on creation keeps the player
+     * usable across that cycle instead of failing the item forever.
+     */
+    private val surfaceCallback = object : SurfaceHolder.Callback {
+        override fun surfaceCreated(holder: SurfaceHolder) {
+            surfaceReady = true
+            attachDisplayWhenReady()
+        }
+
+        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+            surfaceReady = holder.surface.isValid
+            // The surface is created after the view has been laid out, which is
+            // the first moment the band has a real size to fit the video into.
+            applyVideoFit()
+            // A size change on an already attached surface needs no re-attach;
+            // a surface that came back after a destroy does.
+            if (!displayPending) return
+            attachDisplayWhenReady()
+        }
+
+        override fun surfaceDestroyed(holder: SurfaceHolder) {
+            surfaceReady = false
+            val current = player
+            if (current != null) {
+                try {
+                    current.setDisplay(null)
+                } catch (e: Exception) {
+                    // The player is being released; nothing left to detach.
+                }
+                // The player stays prepared across the detach; the item is
+                // resumed by [surfaceCreated] once a surface exists again.
+                displayPending = true
+            }
+        }
+    }
+
+    init {
+        surfaceReady = surfaceHolder.surface.isValid
+        surfaceHolder.addCallback(surfaceCallback)
+    }
 
     /** Bumped whenever the item changes, so a late decode cannot win. */
     private var generation = 0
@@ -128,6 +205,11 @@ class MediaPlayerHost(
         generation++
         releasePlayer()
         clearBitmap()
+        // A previous video — or a still after one — must not inherit its
+        // letterbox size; the surface starts at the full band again.
+        videoWidth = 0
+        videoHeight = 0
+        resetSurfaceFit()
         imageView.visibility = View.GONE
         backdropView.visibility = View.GONE
         placeholder.visibility = View.GONE
@@ -206,6 +288,7 @@ class MediaPlayerHost(
         generation++
         releasePlayer()
         clearBitmap()
+        surfaceHolder.removeCallback(surfaceCallback)
         decode.shutdownNow()
     }
 
@@ -215,27 +298,45 @@ class MediaPlayerHost(
 
     private fun playVideo(item: MediaItem) {
         surfaceView.visibility = View.VISIBLE
-        val uri = uriFor(item)
-        if (uri == null) {
+        val source = videoSource(item)
+        if (source == null) {
             fail("File not found")
             return
         }
         val current = MediaPlayer()
         player = current
+        prepared = false
+        displayPending = true
+        // The phase is named in the failure message: `setDisplay` and
+        // `setDataSource` fail for entirely different reasons and both throw
+        // from the same try block.
+        var phase = "configure"
         try {
             current.setAudioAttributes(videoAttributes)
-            current.setDisplay(surfaceView.holder)
+            phase = "setDisplay"
+            // Not a failure when false: the surface is created asynchronously
+            // after the view turns visible, and `surfaceCreated` attaches it.
+            // A throw, on the other hand, already failed and released the
+            // player, so configuring it further would only mask the real error.
+            attachDisplay(current)
+            if (player !== current) return
+            phase = "setLooping"
             current.setLooping(loop)
-            current.setOnPreparedListener { prepared ->
-                if (player !== prepared) return@setOnPreparedListener
-                prepared.setVolume(volume, volume)
+            current.setOnVideoSizeChangedListener { changed, width, height ->
+                if (player !== changed) return@setOnVideoSizeChangedListener
+                videoWidth = width
+                videoHeight = height
+                // The band may not have been laid out when the player reports;
+                // posting defers the fit to the next UI loop, after layout.
+                main.post { if (player === changed) applyVideoFit() }
+            }
+            current.setOnPreparedListener { ready ->
+                if (player !== ready) return@setOnPreparedListener
+                prepared = true
+                ready.setVolume(volume, volume)
                 if (callerPaused) return@setOnPreparedListener
                 requestFocus()
-                try {
-                    prepared.start()
-                } catch (e: Exception) {
-                    fail("Unable to start playback")
-                }
+                startIfPrepared()
             }
             current.setOnCompletionListener { finished ->
                 if (player === finished) listener.onItemFinished()
@@ -248,26 +349,122 @@ class MediaPlayerHost(
                 }
                 true
             }
-            if (item.remote) {
-                // A remote id is an http(s) URL, not a file in the app's
-                // storage; handing it to the player as a string is what lets
-                // the platform fetch and buffer it.
-                current.setDataSource(item.id)
-            } else {
-                current.setDataSource(activity, uri)
-            }
+            // A remote id is an http(s) URL; a local one is an absolute file
+            // path. Both go in as strings: `setDataSource(Context, Uri)` reads
+            // through a ContentResolver, which cannot open a `file://` Uri.
+            phase = "setDataSource"
+            current.setDataSource(source)
+            phase = "prepareAsync"
             current.prepareAsync()
         } catch (e: Exception) {
-            fail("Unable to play video")
+            fail("Unable to play video ($phase/${e.javaClass.simpleName})")
         }
     }
 
-    /** A remote id is already a URL; a local id is resolved inside the media folder. */
-    private fun uriFor(item: MediaItem): Uri? {
-        if (item.remote) return Uri.parse(item.id)
+    /**
+     * Attaches the display only to a surface that is alive right now.
+     *
+     * `setDisplay` on a `SurfaceHolder` whose surface was destroyed (which is
+     * exactly what happens after `showPlaceholder()` hides the view, and again
+     * before the first layout) throws `IllegalArgumentException`. The attach is
+     * therefore gated on a live surface and otherwise left pending for
+     * [surfaceCallback] to complete when the surface is created.
+     */
+    private fun attachDisplay(current: MediaPlayer): Boolean {
+        if (!surfaceReady || !surfaceHolder.surface.isValid) {
+            displayPending = true
+            return false
+        }
+        return try {
+            current.setDisplay(surfaceHolder)
+            displayPending = false
+            true
+        } catch (e: Exception) {
+            fail("Unable to play video (setDisplay/${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    /**
+     * Fits the video's own frame inside the media band and centres it.
+     *
+     * The surface is a `MATCH_PARENT` child of the band, so a `SurfaceView`
+     * would stretch the picture to the band's aspect — a 16:9 clip on a 2.7:1
+     * band came out horizontally stretched. The band keeps its black
+     * background, so the space the video does not use is a black bar.
+     */
+    private fun applyVideoFit() {
+        if (videoWidth <= 0 || videoHeight <= 0) return
+        // Before the band is laid out there is no box to fit into (and no
+        // parent at all before the view is attached); the surface stays full.
+        val parent = surfaceView.parent as? View ?: return
+        val boxWidth = parent.width
+        val boxHeight = parent.height
+        if (boxWidth <= 0 || boxHeight <= 0) return
+        val fit = MediaLayout.fit(videoWidth, videoHeight, boxWidth, boxHeight)
+        if (fit.w <= 0 || fit.h <= 0) return
+        val params = surfaceView.layoutParams as? FrameLayout.LayoutParams
+            ?: FrameLayout.LayoutParams(fit.w, fit.h)
+        if (params.width == fit.w &&
+            params.height == fit.h &&
+            params.gravity == Gravity.CENTER
+        ) {
+            return
+        }
+        params.width = fit.w
+        params.height = fit.h
+        params.gravity = Gravity.CENTER
+        surfaceView.layoutParams = params
+    }
+
+    /** Back to the full band, so a new item never inherits the last aspect. */
+    private fun resetSurfaceFit() {
+        val params = surfaceView.layoutParams
+        if (params is FrameLayout.LayoutParams &&
+            params.width == FrameLayout.LayoutParams.MATCH_PARENT &&
+            params.height == FrameLayout.LayoutParams.MATCH_PARENT
+        ) {
+            return
+        }
+        surfaceView.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+    }
+
+    /** A surface arrived (or came back): give it the player and resume what waited. */
+    private fun attachDisplayWhenReady() {
+        val current = player ?: return
+        if (!displayPending) return
+        if (!attachDisplay(current)) return
+        // attachDisplay may have failed and released the player already.
+        if (player !== current) return
+        startIfPrepared()
+    }
+
+    /**
+     * Starts a prepared player only once it has somewhere to draw. A video that
+     * starts while the surface is still pending plays its audio invisibly and
+     * never recovers, so the start is deferred like the display itself.
+     */
+    private fun startIfPrepared() {
+        val current = player ?: return
+        if (!prepared || displayPending || callerPaused) return
+        try {
+            if (!current.isPlaying) current.start()
+        } catch (e: Exception) {
+            fail("Unable to start playback (start/${e.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * A remote id is already a URL; a local id is resolved to an absolute path
+     * inside the media folder. Null means the item cannot be opened.
+     */
+    private fun videoSource(item: MediaItem): String? {
+        if (item.remote) return item.id
         val base = store.dir() ?: return null
-        val file = File(base, item.id)
-        return if (file.isFile) Uri.fromFile(file) else null
+        return MediaPaths.localPlaybackPath(base, item)
     }
 
     // ---------------------------------------------------------------------
@@ -466,11 +663,13 @@ class MediaPlayerHost(
     private fun releasePlayer() {
         val current = player ?: return
         player = null
+        prepared = false
         abandonFocus()
         try {
             current.setOnPreparedListener(null)
             current.setOnCompletionListener(null)
             current.setOnErrorListener(null)
+            current.setOnVideoSizeChangedListener(null)
         } catch (e: Exception) {
             // ignore
         }

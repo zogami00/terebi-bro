@@ -139,6 +139,10 @@ class ApiRoutes(
         )
         put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
         put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> mediaOpen(v) }))
+        // Forces a library re-read while the app is in the foreground. A push
+        // that leaves the folder's mtime unchanged is otherwise invisible until
+        // the next resume.
+        put(Method.POST to "/api/media/rescan", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> mediaRescan() }))
 
         // Library. The upload is the one binary request; the JSON framing rule
         // would reject its content type, so it gets the upload framing instead.
@@ -550,7 +554,7 @@ class ApiRoutes(
         val state = host.buildState()
         val mode = state?.mediaMode ?: MediaMode.QMS_ONLY.wire
         val metrics = host.screenMetrics()
-        val renderScale = MediaLayout.renderScale(metrics.heightDp).coerceAtLeast(1.0f)
+        val renderScale = MediaLayout.safeRenderScale(metrics.heightDp)
         return Http.ok(mediaFields(settings, mode, renderScale, state))
     }
 
@@ -681,6 +685,8 @@ class ApiRoutes(
                 // Read-only source diagnostics, mirrored from the state
                 // broadcast so a fresh Media card shows them immediately.
                 "mediaSource" to (state?.mediaSource ?: ""),
+                // The queue size makes an empty library visible at a glance.
+                "mediaCount" to (state?.mediaCount ?: 0),
                 "playlistLastError" to (state?.playlistLastError ?: ""),
                 "playlistLastFetchMs" to (state?.playlistLastFetchMs ?: 0L)
             )
@@ -718,6 +724,26 @@ class ApiRoutes(
     }
 
     /**
+     * Forces the media layer to re-read the library, then reports the queue it
+     * now holds. The re-read itself is asynchronous: the controller hops to the
+     * UI thread and walks the folder on its IO executor, so `count`/`source` are
+     * the values published at the moment the request returns. The controller's
+     * next state broadcast carries the settled figures, and the caller refreshes
+     * the listing from `/api/media/files` independently.
+     */
+    private fun mediaRescan(): Response {
+        host.onMediaLibraryChanged()
+        val state = host.buildState()
+        return Http.ok(
+            mapOf(
+                "ok" to true,
+                "count" to (state?.mediaCount ?: 0),
+                "source" to (state?.mediaSource ?: "")
+            )
+        )
+    }
+
+    /**
      * Streams one uploaded file to a `.part` file in the media folder. The
      * body is never buffered whole: only the first 4 KiB are kept for the magic
      * byte check. Quota and reserve are checked before the first byte.
@@ -744,6 +770,9 @@ class ApiRoutes(
         }
 
         var temp: File? = null
+        // The decode probe is advisory (see probeMediaFile); it is recorded
+        // here so the success response can report what the device thought.
+        var probe = ProbeOutcome.Failed
         try {
             // Media is only ever written to external app storage. A missing
             // volume is a 507, never a write beside SharedPreferences.
@@ -810,17 +839,13 @@ class ApiRoutes(
                             "File content does not match its extension"
                         )
                     }
-                    // Best-effort sanity probe before the file enters the
-                    // library. It is not a guarantee: some valid containers
-                    // report no probeable metadata, so only a definite
-                    // exception or a definite zero result is refused.
-                    if (!probeMediaFile(upload)) {
-                        return Http.error(
-                            Response.Status.UNSUPPORTED_MEDIA_TYPE,
-                            "unsupported_media_type",
-                            "File cannot be decoded"
-                        )
-                    }
+                    // Advisory only: the retriever is unreliable on some
+                    // devices (notably the API 28 emulator) and once refused a
+                    // verified-good MP4. Refusing a valid file is worse than
+                    // admitting one that later fails to play: a play failure is
+                    // visible, recoverable and advances the queue, while a
+                    // silent rejection looks like the feature is broken.
+                    probe = probeMediaFile(upload)
                 }
             }
 
@@ -846,6 +871,7 @@ class ApiRoutes(
                     "name" to item.name,
                     "bytes" to length,
                     "kind" to item.kind.name.lowercase(),
+                    "probe" to probe.wire,
                     "totalBytes" to mediaStore.totalBytes(),
                     "freeBytes" to mediaStore.freeBytes()
                 )
@@ -967,14 +993,16 @@ class ApiRoutes(
     }
 
     /**
-     * Best-effort `MediaMetadataRetriever` sanity check on the finished `.part`
-     * file. It runs on the server's request thread (never the UI thread) and is
-     * documented as best-effort: an exception or a definite zero width/height
-     * *and* zero duration is refused, but a container the retriever cannot
-     * introspect on this device may still be valid. It is a gate against a
-     * renamed or truncated file, not a decode guarantee.
+     * Advisory `MediaMetadataRetriever` check on the finished `.part` file.
+     *
+     * It is **not a gate**: [mediaUpload] accepts any file whose magic bytes
+     * match its extension, whatever this returns. The retriever cannot
+     * introspect every valid container on every device (the API 28 emulator
+     * refuses a verified-good MP4 with `avc1`/`mp4a`), so an unreadable result
+     * is reported to the operator as a warning rather than a rejection. It
+     * runs on the server's request thread, never the UI thread.
      */
-    private fun probeMediaFile(file: File): Boolean = try {
+    private fun probeMediaFile(file: File): ProbeOutcome = try {
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(file.absolutePath)
@@ -986,12 +1014,23 @@ class ApiRoutes(
                 ?.toIntOrNull() ?: 0
             val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 ?.toLongOrNull() ?: 0L
-            (width > 0 && height > 0) || duration > 0L
+            if ((width > 0 && height > 0) || duration > 0L) {
+                ProbeOutcome.Readable
+            } else {
+                ProbeOutcome.NotReadable
+            }
         } finally {
             retriever.release()
         }
     } catch (e: Exception) {
-        false
+        ProbeOutcome.Failed
+    }
+
+    /** Advisory decode-probe result, reported as `probe` in the upload response. */
+    internal enum class ProbeOutcome(val wire: String) {
+        Readable("readable"),
+        NotReadable("unreadable"),
+        Failed("error")
     }
 
     /** One upload at a time, so a second request is a clean 409. */

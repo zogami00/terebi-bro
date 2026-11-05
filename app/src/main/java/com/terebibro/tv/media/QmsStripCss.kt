@@ -13,11 +13,23 @@ import kotlin.math.roundToInt
  * ## Compatibility floor
  *
  * The reference device runs Chromium 66. Everything emitted here is limited to
- * what that engine supports: no flexbox `gap` (Chrome 84), no `aspect-ratio`
- * (88), no `inset` shorthand (87), no `:is()` / `:where()` (88), no
- * `clamp()`/`min()`/`max()` (79). Card spacing is therefore adjacent-sibling
- * margins and the layout degrades gracefully on a non-grid parent. The
- * `QmsStripCssTest` guard fails the build if one of those features returns.
+ * what that engine supports: no flexbox `gap` as a spacing mechanism (Chrome
+ * 84 — the list only resets it to `0`, which an engine without support simply
+ * ignores), no `aspect-ratio` (88), no `inset` shorthand (87), no `:is()` /
+ * `:where()` (88), no `clamp()`/`min()`/`max()` (79). `calc()` predates the
+ * floor and is used for the card height. Card spacing is therefore a right
+ * margin on every card, neutralised on the last one, and the layout degrades
+ * gracefully on a non-grid parent. The `QmsStripCssTest` guard fails the build
+ * if one of those features returns.
+ *
+ * ## Layout model
+ *
+ * There is exactly one: the page is a block box pinned to the viewport, the
+ * header is `position: fixed` at the top, `main` is `position: fixed` between
+ * the header's bottom and the viewport's bottom, and the card list is
+ * `position: absolute` filling `main`. No height is distributed through the
+ * vendor's own flex column, so the queue band cannot be pushed off-screen by
+ * the vendor's padding or `gap`.
  *
  * ## Vendor structure
  *
@@ -31,6 +43,35 @@ object QmsStripCss {
 
     /** Used when the configured strip selector is blank or unsafe. */
     private const val DEFAULT_STRIP_SELECTOR = "main > div:nth-child(1)"
+
+    /** Clinic-name size as a fraction of the header band height. */
+    private const val HEADER_TEXT_RATIO = 0.38
+
+    /** Date/clock size as a fraction of the header band height. */
+    private const val HEADER_META_RATIO = 0.22
+
+    /**
+     * Card field sizes as fractions of the queue band height. The ratios leave
+     * room for a two-line location inside the band: at 0.36 the location plus
+     * the number and the time overflowed the queue row on the device, and the
+     * label row above the number needed its share as well.
+     */
+    private const val CURRENT_NUMBER_RATIO = 0.32
+    private const val HISTORY_NUMBER_RATIO = 0.22
+    private const val LOCATION_RATIO = 0.11
+    private const val TIME_RATIO = 0.065
+    private const val LABEL_RATIO = 0.055
+
+    /** Logo height as a fraction of the header band: leaves the band's padding. */
+    private const val LOGO_HEIGHT_RATIO = 0.72
+
+    /** Space between two cards as a fraction of the queue band height. */
+    private const val CARD_GAP_RATIO = 0.09
+
+    /** The authored value each ratio is tuned against; a setting scales the ratio. */
+    private const val CURRENT_NUMBER_BASE = 96f
+    private const val HISTORY_NUMBER_BASE = 56f
+    private const val LABEL_BASE = 15f
 
     /** Used when the configured field selector is blank or unsafe. */
     private const val DEFAULT_NUMBER_SELECTOR = "div:first-child > span"
@@ -93,6 +134,26 @@ object QmsStripCss {
         val scale = if (renderScale.isFinite() && renderScale > 0f) renderScale else 1f
         fun px(value: Int): String = "${(value * scale).roundToInt()}px"
 
+        // The cards must fit the queue band by construction, so their type is
+        // derived from the band height rather than taken from an authored
+        // absolute size. The settings stay as multipliers around the default,
+        // so an operator can still enlarge or shrink them.
+        val queueAuthoredPx = 1080.0 * settings.stripHeightPercent / 100.0
+        fun fromQueue(ratio: Double, multiplier: Float): Int =
+            (queueAuthoredPx * ratio * multiplier).roundToInt()
+
+        val currentNumberSize = fromQueue(
+            CURRENT_NUMBER_RATIO,
+            settings.currentNumberPx / CURRENT_NUMBER_BASE
+        )
+        val historyNumberSize = fromQueue(
+            HISTORY_NUMBER_RATIO,
+            settings.historyNumberPx / HISTORY_NUMBER_BASE
+        )
+        val locationSize = fromQueue(LOCATION_RATIO, settings.labelPx / LABEL_BASE)
+        val timeSize = fromQueue(TIME_RATIO, settings.labelPx / LABEL_BASE)
+        val labelSize = fromQueue(LABEL_RATIO, settings.labelPx / LABEL_BASE)
+
         val scope = "html[${attribute()}]"
         val configured = safeSelector(settings.qmsStripSelector, DEFAULT_STRIP_SELECTOR)
         val numberSelector = safeSelector(settings.qmsNumberSelector, DEFAULT_NUMBER_SELECTOR)
@@ -138,58 +199,222 @@ object QmsStripCss {
             grid-column: 1 / -1 !important;
         """.trimIndent()
 
-        // The height chain: a content-sized page would otherwise collapse the
-        // band to the height of a single row.
-        rules += "$scope, $scope body, $scope main, $column" to "height: 100% !important;"
+        // Neither intermediate box may become the containing block of the
+        // absolute card list: they are vendor flow elements whose height comes
+        // from their content, so a vendor `relative` would make the queue band
+        // depend on that content instead of on `main`. Only `main` is positioned
+        // for the band, and it owns the inset. A card is positioned as well, but
+        // only to be the containing block of its own `::before` label: without
+        // it the absolute label resolves against the list and the label sits on
+        // the band's top edge, losing its ascenders.
+        rules += "$column, $column > section" to "position: static !important;"
+
+        // The page is pinned to the viewport and both bands are positioned,
+        // not flexed. The vendor page is a flex column with its own padding and
+        // `gap`; every attempt to win that column (`flex: 1 1 0`,
+        // `min-height: 0`) still let `main` overflow the bottom edge, because
+        // the vendor's own box model kept re-adding space. Absolute positioning
+        // against the viewport is deterministic on Chromium 66 and ignores the
+        // vendor's flow entirely.
+        rules += "$scope, $scope body" to """
+            height: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            display: block !important;
+        """.trimIndent()
+        // `main` owns everything below the header: its top is the header's
+        // height and its bottom is the viewport edge, so the queue band can
+        // never be pushed below the screen. It is block (not flex) so its own
+        // `gap`/padding cannot add another slice, and the padding is zeroed for
+        // the absolute list inside it.
+        val headerPx = (1080 * settings.headerBandPercent / 100.0).roundToInt()
+        val headerHeight = px(headerPx)
+        rules += "$scope main" to """
+            position: fixed !important;
+            top: $headerHeight !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            height: auto !important;
+            max-height: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            display: block !important;
+            overflow: hidden !important;
+        """.trimIndent()
 
         // A stray D-pad press on the page's fullscreen button would push the
         // app into its HTML5 custom-view path mid-signage.
         rules += "$scope header button" to "display: none !important;"
+        // The vendor sizes the header with `h-[8vh]`, but `vh` resolves against
+        // this WebView's viewport, which is only the header band plus the strip
+        // (~29 % of the screen). The band is a fixed 7 % of the screen, so its
+        // height is derived from the setting instead: 1080 * band / 100, scaled
+        // by the same factor the native bands use.
+        //
+        // Fixed positioning takes the header out of the vendor column: it no
+        // longer competes with `main` for the remaining height, so no flex
+        // basis or `min-height: 0` is needed to pin it.
         rules += "$scope header" to """
-            padding: 0 ${px(12)} !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            height: $headerHeight !important;
+            max-height: $headerHeight !important;
+            display: flex !important;
             align-items: center !important;
+            flex-wrap: nowrap !important;
+            overflow: hidden !important;
+            box-sizing: border-box !important;
+            padding: 0 ${px(8)} !important;
+        """.trimIndent()
+        // The logo's own wrapper is a flex child too; without a fixed basis it
+        // can grow past the band and drag the header with it.
+        rules += "$scope header > div" to """
+            flex: 0 0 auto !important;
+            min-height: 0 !important;
         """.trimIndent()
         rules += "$scope header *" to """
             margin: 0 !important;
             line-height: 1.05 !important;
         """.trimIndent()
+        // The vendor's `2xl:h-14` logo is 56 CSS px, taller than the whole
+        // band. A percentage `max-height` cannot cap it: the wrapper is a flex
+        // item with no height of its own, so `78%` resolves to `none` and the
+        // vendor height wins. The cap is derived from the band in pixels, like
+        // every other dimension here (`width: auto` + `max-width: none` keeps
+        // its aspect ratio and stops a vendor `w-*` from squeezing it).
+        val logoPx = (headerPx * LOGO_HEIGHT_RATIO).toInt()
+        rules += "$scope header img" to """
+            height: ${px(logoPx)} !important;
+            width: auto !important;
+            max-width: none !important;
+            max-height: ${px(logoPx)} !important;
+            min-height: 0 !important;
+            object-fit: contain !important;
+            flex: 0 0 auto !important;
+        """.trimIndent()
+        // Text is sized from the band, not from the vendor's breakpoints: a
+        // breakpoint measured against the 29 % viewport is not the screen. The
+        // clinic name must stay on one line, so the size leaves room for the
+        // longest label instead of wrapping it.
+        val headerNameSize = (headerPx * HEADER_TEXT_RATIO).roundToInt()
+        val headerMetaSize = (headerPx * HEADER_META_RATIO).roundToInt()
+        rules += "$scope header p, $scope header h1, $scope header p span, $scope header h1 span" to """
+            font-size: ${px(headerNameSize)} !important;
+            font-weight: 700 !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        """.trimIndent()
+        // The date and the clock sit in the same header but are not the name:
+        // they keep a smaller size so the name has room to grow. A span inside
+        // the name (`h1 > span`) keeps the name size above by specificity.
+        rules += "$scope header span, $scope header time, $scope header small" to """
+            font-size: ${px(headerMetaSize)} !important;
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+        """.trimIndent()
 
+        // The card row is absolutely positioned inside `main`, which is itself
+        // fixed: `top/left/right/bottom: 0` resolves against `main`'s padding
+        // box, so the row is exactly the queue band. `align-items: center` and
+        // the bottom padding keep the cards clear of the band's lower edge, and
+        // the 4 px top padding gives the card's label row air. `gap` is pinned
+        // to zero so a vendor grid/flex `gap` cannot interfere with the card
+        // margins that carry the spacing (Chromium 66 ignores the reset).
         rules += list to """
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
             display: flex !important;
             flex-direction: row !important;
-            align-items: stretch !important;
-            height: 100% !important;
-            padding: ${px(18)} ${px(16)} 0 !important;
+            align-items: center !important;
+            gap: 0 !important;
+            padding: ${px(4)} ${px(10)} ${px(10)} ${px(10)} !important;
             box-sizing: border-box !important;
             overflow: hidden !important;
             -webkit-mask-image: linear-gradient(to right, #000 88%, transparent);
             mask-image: linear-gradient(to right, #000 88%, transparent);
         """.trimIndent()
 
-        // Flexbox `gap` needs Chrome 84; the reference device is Chromium 66.
-        rules += "$card + $card" to "margin-left: ${px(12)} !important;"
+        // `space-y-*` on a vertical list becomes a bug once the list is a row:
+        // it applies `margin-top` to every child but the first, pushing the
+        // later cards down by 8 px inside the fixed-height band.
+        rules += "$list > *" to "margin-top: 0 !important;"
 
+        // Flexbox `gap` needs Chrome 84; the reference device is Chromium 66.
+        // The space is a right margin on every card instead of an
+        // adjacent-sibling selector, which the vendor DOM did not reliably
+        // match: the last card cancels its own margin so the row does not gain
+        // a trailing gap. The margin follows the band so it stays visible when
+        // the band is small: a constant 16 authored px is only 9 CSS px on the
+        // device, and the vendor card border ate all of it.
+        val cardGapPx = (queueAuthoredPx * CARD_GAP_RATIO).toInt()
+
+        // The vendor's `border-4` is 4 CSS px per side and consumed most of
+        // the inter-card gap. It is removed from the layout; the same hairline
+        // is drawn with an inset outline, which costs no space. The card is
+        // also `position: relative`: it is the containing block of its own
+        // `::before` label, so the label tracks the card's top padding instead
+        // of the band's edge.
         rules += card to """
             flex: 0 0 auto !important;
             display: flex !important;
             flex-direction: column !important;
+            align-items: flex-start !important;
             justify-content: center !important;
             position: relative !important;
+            height: calc(100% - ${px(4)}) !important;
+            max-height: calc(100% - ${px(4)}) !important;
+            margin: 0 ${px(cardGapPx)} 0 0 !important;
             min-width: ${px(settings.historyCardMinPx)} !important;
             max-width: ${px(settings.historyCardMaxPx)} !important;
-            padding: ${px(20)} ${px(10)} ${px(8)} !important;
+            min-height: 0 !important;
+            padding: ${px(16)} ${px(8)} ${px(6)} !important;
             box-sizing: border-box !important;
+            border-width: 0 !important;
+            outline: ${px(2)} solid rgba(255, 255, 255, 0.18) !important;
+            outline-offset: -${px(2)} !important;
             overflow: hidden !important;
         """.trimIndent()
 
+        // The trailing margin of the final card is not spacing between cards.
+        rules += "$card:last-child" to "margin-right: 0 !important;"
+
+        // The vendor's own spacing is authored for a roomy card, not a 22 %
+        // band: `mb-2` on the number and `py-3` on the card make every card
+        // taller than the band and clip the pills. Only the vertical margins
+        // are reset — the card's own right margin (on the card itself, not on
+        // its children) carries the spacing above.
+        rules += "$card *" to """
+            margin-top: 0 !important;
+            margin-bottom: 0 !important;
+        """.trimIndent()
+
         rules += numberOnCard to """
-            font-size: ${px(settings.historyNumberPx)} !important;
+            font-size: ${px(historyNumberSize)} !important;
             line-height: 1 !important;
+            display: block !important;
+            white-space: nowrap !important;
+            max-height: 1.15em !important;
         """.trimIndent()
 
         // A long room name wraps to two lines instead of being cut with an
         // ellipsis: an abbreviated counter is a wrong counter. An unspaced value
-        // breaks mid-word rather than being clipped at the card edge.
+        // breaks mid-word rather than being clipped at the card edge. The
+        // vendor's `w-44`/`w-64`/`w-96` resolves wider than the card itself, so
+        // the fixed width is cancelled and the pill sizes to the card.
+        //
+        // `display: -webkit-box` replaces the vendor's flex centring, so the
+        // text is centred explicitly: `text-align` centres each line,
+        // `-webkit-box-pack` centres the line boxes, and the auto side margins
+        // centre a pill narrower than the card.
         rules += locationOnCard to """
             display: -webkit-box !important;
             -webkit-box-orient: vertical !important;
@@ -198,13 +423,23 @@ object QmsStripCss {
             overflow: hidden !important;
             overflow-wrap: break-word !important;
             word-wrap: break-word !important;
+            width: auto !important;
+            min-width: 0 !important;
             max-width: 100% !important;
-            font-size: ${px(settings.labelPx * 2)} !important;
+            padding: 0 ${px(10)} !important;
+            line-height: 1.15 !important;
+            font-size: ${px(locationSize)} !important;
+            text-align: center !important;
+            -webkit-box-pack: center !important;
+            justify-content: center !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
         """.trimIndent()
 
         rules += timeOnCard to """
-            font-size: ${px(settings.labelPx)} !important;
+            font-size: ${px(timeSize)} !important;
             line-height: 1.2 !important;
+            white-space: nowrap !important;
         """.trimIndent()
 
         rules += current to """
@@ -215,16 +450,19 @@ object QmsStripCss {
         """.trimIndent()
 
         rules += numberOnCurrent to
-            "font-size: ${px(settings.currentNumberPx)} !important;"
+            "font-size: ${px(currentNumberSize)} !important;"
 
         // Pseudo-elements cannot be wiped by a re-render and are not part of
-        // textContent, so they cannot contaminate the detection key.
+        // textContent, so they cannot contaminate the detection key. The label
+        // is inset from the card's top edge: at `top: 0` with `line-height: 1`
+        // its ascenders were cut by the card's `overflow: hidden`.
         rules += "$current::before" to """
             content: var(--terebi-label-current);
             position: absolute;
-            top: ${px(2)};
-            left: ${px(10)};
-            font-size: ${px(settings.labelPx)};
+            top: ${px(3)} !important;
+            left: ${px(10)} !important;
+            font-size: ${px(labelSize)};
+            line-height: 1.1 !important;
             text-transform: uppercase;
             pointer-events: none;
         """.trimIndent()
@@ -232,9 +470,10 @@ object QmsStripCss {
         rules += "$card:nth-child(2)::before" to """
             content: var(--terebi-label-history);
             position: absolute;
-            top: ${px(2)};
-            left: ${px(10)};
-            font-size: ${px(settings.labelPx)};
+            top: ${px(3)} !important;
+            left: ${px(10)} !important;
+            font-size: ${px(labelSize)};
+            line-height: 1.1 !important;
             text-transform: uppercase;
             pointer-events: none;
         """.trimIndent()
@@ -247,7 +486,7 @@ object QmsStripCss {
             display: block;
             margin: auto;
             padding: 0 ${px(16)};
-            font-size: ${px(settings.labelPx * 2)};
+            font-size: ${px(labelSize * 2)};
             text-transform: uppercase;
             text-align: center;
             pointer-events: none;
@@ -265,7 +504,7 @@ object QmsStripCss {
             right: 0;
             transform: translateY(-50%);
             text-align: center;
-            font-size: ${px(settings.labelPx * 2)};
+            font-size: ${px(labelSize * 2)};
             text-transform: uppercase;
             pointer-events: none;
         """.trimIndent()

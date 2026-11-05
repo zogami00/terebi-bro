@@ -122,4 +122,29 @@ class MediaPathsTest {
         assertTrue(MediaPaths.isListableName("clip.mp4"))
         assertTrue(MediaPaths.isListableName("poster.PNG"))
     }
+
+    // ------------------------------------------------------------------
+    // localPlaybackPath: the source string MediaPlayer.setDataSource gets
+    // ------------------------------------------------------------------
+
+    private fun item(id: String, remote: Boolean = false) =
+        MediaItem(id = id, name = id, kind = MediaItem.Kind.VIDEO, durationMs = 0L, remote = remote)
+
+    @Test
+    fun `a local item yields the absolute path of the stored file`() {
+        val created = touch("clip.mp4")
+        val path = MediaPaths.localPlaybackPath(base, item("clip.mp4"))
+        assertEquals(created.canonicalFile.absolutePath, path)
+        assertTrue(File(path!!).isAbsolute)
+    }
+
+    @Test
+    fun `a remote item yields null so the caller keeps the URL`() {
+        assertNull(MediaPaths.localPlaybackPath(base, item("https://example.test/clip.mp4", remote = true)))
+    }
+
+    @Test
+    fun `a local item that is missing yields null`() {
+        assertNull(MediaPaths.localPlaybackPath(base, item("missing.mp4")))
+    }
 }

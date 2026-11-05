@@ -244,6 +244,10 @@ commands. Enable it from the controller's Media card (or
 `POST /api/settings/media {"mediaModeEnabled": true}`) and the TV can show a signage
 loop beside the queue dashboard.
 
+The split layout is authored for a 1080p **dp** surface and the whole interface
+scales down proportionally on a shorter one (617 dp renders at 57 %), so a phone
+is not the intended display — a 1080p TV at density 1.0 shows it full size.
+
 ### Four modes
 
 | Mode | What is on screen |
@@ -278,6 +282,14 @@ and time are always shown verbatim. If the vendor markup changes and the
 selectors stop matching, the strip says `PAPAN GILIRAN TIDAK TERSEDIA` rather
 than showing a stale or invented number.
 
+The two bands are pinned to the viewport rather than distributed through the
+vendor's `main` column: the header is fixed at the top with the configured
+header-band height, the queue band is fixed from the header's bottom to the
+screen edge, and the card row fills it absolutely. The vendor's own padding and
+`gap` therefore cannot push the queue band below the screen edge on the
+reference Chromium 66 device, and the card type is derived from the band height
+so it shrinks with the setting.
+
 The call signal is the DOM change by default. `callSource` may be
 `dom_or_audio` to also treat the page's chime as a call, or `audio` to let only
 the chime take the screen (the DOM change still updates the number and location,
@@ -304,7 +316,12 @@ Local files live in the app-private external folder:
 There is no runtime permission, no SAF picker and no USB ritual; `adb push` into
 that folder works, and the folder is **rescanned on resume**, so a push while
 the app is in the foreground appears without a restart. The currently playing
-item is kept when it still exists.
+item is kept when it still exists. A push that does not change the folder's
+modification time is invisible to a plain resume, so the Library card's **Reload
+media** button (or `POST /api/media/rescan`) forces a re-read while the app
+stays in front. The button reports the queue size it saw; an empty `local · 0
+items` line next to the band's "media unavailable" notice means the folder
+really is empty, not that the scan was stale.
 
 ### Uploading from the controller
 
@@ -322,9 +339,16 @@ visible to the queue. The caps are fixed constants, not settings:
 | Concurrency | 3 uploads |
 | Rate | 6/min per token |
 
-Magic bytes must match the extension (MP4 `ftyp`, JPEG SOI, PNG signature) and
-a best-effort `MediaMetadataRetriever` check runs after that. A file that passes
-and still will not decode is reported as `mediaError` and skipped.
+Magic bytes must match the extension (MP4 `ftyp`, JPEG SOI, PNG signature).
+**That is the gate** — a JPEG renamed `.mp4` is refused here. The
+`MediaMetadataRetriever` check is **advisory only** and never refuses the upload:
+the retriever cannot introspect every valid container on every device (the API 28
+emulator rejects a good H.264/AAC MP4), and refusing a valid file is worse than
+admitting one that later fails to play — a play failure is visible, recoverable
+and advances the queue, while a silent rejection looks like the feature is
+broken. The upload response carries `probe` (`readable`, `unreadable`, `error`);
+anything but `readable` shows a warning in the controller, not an error. A file
+that passes and still will not decode is reported as `mediaError` and skipped.
 
 ### HTTP playlist
 
@@ -369,6 +393,10 @@ whole, so one bad value writes nothing.
 | `volumePercent` | `100` | 0–100; a waiting room will usually want 0. |
 | `uiLanguage` | `ms` | `ms`, `en`, `zh` or `ta` — patient-facing labels only. |
 | `mediaFillMode` | `letterboxBlur` | `letterboxBlur`, `letterbox` or `cover` (the only mode that crops). |
+
+A video is always letterboxed to its own aspect ratio inside the media band and
+centred; `mediaFillMode` applies to stills only, so a clip is never stretched to
+the band or cropped. The band's black background becomes the bars.
 
 All pixel values are authored against a **1080p baseline** and multiplied at
 runtime by `renderScale = screenHeightDp / 1080`, taken from the dp the device
@@ -930,7 +958,7 @@ real-hardware behaviour remains unverified.
 
 V2 is validated **at the JVM and build level only**:
 
-- `testDebugUnitTest` passes: **542 JVM tests, 0 failures, 1 skipped** (a symlink
+- `testDebugUnitTest` passes: **554 JVM tests, 0 failures, 1 skipped** (a symlink
   test skipped on Windows). This includes the media reducer and layout, the
   settings validator, the QMS call key, signal clamp and injected-script
   escaping, the media queue and playlist parser, the upload rules, the media

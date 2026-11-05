@@ -53,6 +53,21 @@ object MediaPaths {
         null
     }
 
+    /**
+     * The filesystem path a video player should open for [item], or null when
+     * there is nothing it can open.
+     *
+     * A remote item is a URL, not a path, so it yields null and the caller keeps
+     * the URL as its source. A local item only resolves to an existing regular
+     * file directly inside [base], exactly like [resolve] — `MediaPlayer` must
+     * receive a plain path because `setDataSource(Context, Uri)` cannot read a
+     * `file://` Uri.
+     */
+    fun localPlaybackPath(base: File, item: MediaItem): String? {
+        if (item.remote) return null
+        return resolve(base, item.id)?.absolutePath
+    }
+
     /** True when [file] (canonically) is a direct child of the canonical [base]. */
     fun isDirectChild(base: File, file: File): Boolean = try {
         val canonicalBase = canonicalBase(base) ?: return false

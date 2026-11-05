@@ -1341,7 +1341,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             screenWidthDp = metrics.widthDp,
             screenHeightDp = metrics.heightDp,
             densityDpi = metrics.densityDpi,
-            renderScale = MediaLayout.renderScale(metrics.heightDp).coerceAtLeast(1.0f)
+            renderScale = MediaLayout.safeRenderScale(metrics.heightDp)
         )
     }
 
@@ -1638,7 +1638,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         val density = if (metrics.density > 0f) metrics.density else 1f
         if (metrics.heightPixels <= 0) return 1f
         val heightDp = (metrics.heightPixels / density).roundToInt()
-        return MediaLayout.renderScale(heightDp).coerceAtLeast(1f)
+        return MediaLayout.safeRenderScale(heightDp)
     }
 
     override fun screenMetrics(): ScreenMetrics =

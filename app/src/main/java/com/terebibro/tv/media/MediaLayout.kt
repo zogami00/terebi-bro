@@ -56,6 +56,19 @@ object MediaLayout {
 
     fun renderScale(screenHeightDp: Int): Float = screenHeightDp / 1080f
 
+    /**
+     * The 1080p authoring surface mapped to this device's real dp height.
+     *
+     * A surface *shorter* than 1080 dp must render the whole interface smaller,
+     * not unchanged: the authored bands are percentages of the 1080 dp design,
+     * so flooring the factor at 1 leaves a phone with a header that fills most
+     * of the WebView band and cards that overflow it. The bounds only guard
+     * against a zero, negative or absurd height (a bogus metric report), never
+     * against an honest small screen.
+     */
+    fun safeRenderScale(screenHeightDp: Int): Float =
+        if (screenHeightDp <= 0) 1f else renderScale(screenHeightDp).coerceIn(0.25f, 4f)
+
     fun fit(videoW: Int, videoH: Int, boxW: Int, boxH: Int): Fit {
         if (videoW <= 0 || videoH <= 0 || boxW <= 0 || boxH <= 0) return Fit(0, 0)
         val videoAspect = videoW.toDouble() / videoH

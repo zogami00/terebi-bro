@@ -460,6 +460,9 @@ class MediaController(
             remoteFailures = 0
         }
         manualPaused = true
+        // A local failure never advances, so nothing else will take the band.
+        // Show the MEDIA_UNAVAILABLE notice instead of leaving it black.
+        if (item != null && !item.remote) host?.showPlaceholder()
         onChanged()
     }
 

@@ -101,8 +101,38 @@ class MediaLayoutTest {
     }
 
     @Test
+    fun `safeRenderScale shrinks below 1080 dp instead of flooring at one`() {
+        // A real phone surface: 1920x1080 px at 280 dpi is 617 dp tall, so the
+        // authored interface has to come down to 57 % or the header band eats
+        // the WebView and the cards clip.
+        assertEquals(0.571f, MediaLayout.safeRenderScale(617), 0.0005f)
+        assertEquals(1.0f, MediaLayout.safeRenderScale(1080), 0.0001f)
+        assertEquals(2.0f, MediaLayout.safeRenderScale(2160), 0.0001f)
+        assertEquals(0.5f, MediaLayout.safeRenderScale(540), 0.0001f)
+        assertEquals(1.778f, MediaLayout.safeRenderScale(1920), 0.0005f)
+    }
+
+    @Test
+    fun `safeRenderScale guards only against a zero or absurd height`() {
+        assertEquals(1.0f, MediaLayout.safeRenderScale(0), 0.0001f)
+        assertEquals(1.0f, MediaLayout.safeRenderScale(-720), 0.0001f)
+        // A 100 dp surface is not a display; it is a bad metric report.
+        assertEquals(0.25f, MediaLayout.safeRenderScale(100), 0.0001f)
+        assertEquals(4.0f, MediaLayout.safeRenderScale(10000), 0.0001f)
+    }
+
+    @Test
     fun `a 16 by 9 video letterboxes inside a wide box`() {
         assertEquals(MediaLayout.Fit(1362, 766), MediaLayout.fit(1920, 1080, 1920, 766))
+    }
+
+    /**
+     * The live bug: a 16:9 screen recording was stretched across a ~2.7:1
+     * media band. The fit is height constrained there: 702 * 16 / 9 = 1248.
+     */
+    @Test
+    fun `a 16 by 9 video letterboxes inside a 2 point 7 to 1 band`() {
+        assertEquals(MediaLayout.Fit(1248, 702), MediaLayout.fit(1920, 1080, 1920, 702))
     }
 
     @Test

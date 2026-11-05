@@ -608,9 +608,12 @@
     var el = $('mediaSourceState');
     if (!el || !source) return;
     var name = source.mediaSource ? source.mediaSource : 'none';
+    var count = Number(source.mediaCount) || 0;
     var fetchedMs = Number(source.playlistLastFetchMs) || 0;
     var error = source.playlistLastError;
-    var parts = ['Source: ' + name];
+    // The count is what makes an empty queue obvious without opening the
+    // library: "local · 0 items" beside the "media unavailable" band.
+    var parts = [name + ' \u00b7 ' + count + (count === 1 ? ' item' : ' items')];
     parts.push(fetchedMs > 0
       ? 'last playlist fetch: ' + Math.round(fetchedMs) + ' ms'
       : 'playlist not fetched yet');
@@ -705,6 +708,13 @@
     if (el) el.textContent = message || '';
   }
 
+  /* A warning only: the magic-byte gate accepted the file, but this device's
+     metadata retriever could not read it. The upload is kept. */
+  function setUploadWarning(message) {
+    var el = $('libraryWarning');
+    if (el) el.textContent = message || '';
+  }
+
   function setUploadProgress(text) {
     var el = $('uploadProgress');
     if (el) el.textContent = text || '';
@@ -757,6 +767,25 @@
     api('GET', '/api/media/files', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.files) {
         renderLibrary(result.json.files);
+      }
+    });
+  }
+
+  /* Forces the TV to re-read the media folder. An `adb push` while the app is
+     in the foreground is otherwise invisible until the next resume, so this is
+     the operator's way to make it appear without backgrounding the app. */
+  function rescanLibrary() {
+    setUploadError('');
+    setUploadProgress('Reloading media\u2026');
+    api('POST', '/api/media/rescan', {}).then(function (result) {
+      if (result.status === 200 && result.json) {
+        var count = Number(result.json.count) || 0;
+        setUploadProgress('Media reloaded \u2014 ' + count + (count === 1 ? ' item.' : ' items.'));
+        refreshLibrary();
+        refreshMedia();
+      } else {
+        setUploadProgress('');
+        setUploadError(apiError(result));
       }
     });
   }
@@ -821,6 +850,7 @@
     var input = $('libraryFileInput');
     var files = input && input.files ? input.files : null;
     setUploadError('');
+    setUploadWarning('');
     if (!files || files.length === 0) {
       setUploadError('Choose at least one file to upload.');
       return;
@@ -829,6 +859,7 @@
     for (var i = 0; i < files.length; i++) list.push(files[i]);
     var index = 0;
     var firstError = '';
+    var firstWarning = '';
 
     function next() {
       if (index >= list.length) {
@@ -866,6 +897,15 @@
         try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; }
         if (xhr.status === 200 && json && json.ok) {
           setUploadProgress('Uploaded ' + file.name + '.');
+          // The server accepted the file on its magic bytes; a probe that is
+          // not `readable` is a warning, never a rejection.
+          if (json.probe && json.probe !== 'readable') {
+            if (!firstWarning) {
+              firstWarning = file.name + ': uploaded, but this device could not ' +
+                'read its metadata \u2014 if it does not play, check the codec.';
+            }
+            setUploadWarning(firstWarning);
+          }
           done('');
         } else {
           var message = json && json.error
@@ -981,6 +1021,7 @@
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });
 
     $('uploadButton').addEventListener('click', uploadFiles);
+    $('libraryReloadButton').addEventListener('click', rescanLibrary);
 
     $('unpairButton').addEventListener('click', unpair);
   }
