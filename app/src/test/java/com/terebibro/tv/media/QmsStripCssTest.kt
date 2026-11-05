@@ -11,6 +11,22 @@ class QmsStripCssTest {
     private val atOne = QmsStripCss.build(settings, 1f)
     private val atTwo = QmsStripCss.build(settings, 2f)
 
+    /** The stylesheet is the one place the signage language reaches the page. */
+    @Test
+    fun `the labels follow the configured language`() {
+        for (language in UiLanguage.entries) {
+            val css = QmsStripCss.build(settings.copy(uiLanguage = language), 1f)
+            val current = SignageStrings.label(language, SignageStrings.Key.CURRENT)
+            val history = SignageStrings.label(language, SignageStrings.Key.HISTORY)
+            val empty = SignageStrings.label(language, SignageStrings.Key.NO_CALL)
+            val unavailable = SignageStrings.label(language, SignageStrings.Key.QMS_UNAVAILABLE)
+            assertTrue("$language/current", css.contains(QmsStripCss.cssString(current)))
+            assertTrue("$language/history", css.contains(QmsStripCss.cssString(history)))
+            assertTrue("$language/empty", css.contains(QmsStripCss.cssString(empty)))
+            assertTrue("$language/unavailable", css.contains(QmsStripCss.cssString(unavailable)))
+        }
+    }
+
     @Test
     fun `every rule is scoped under the strip attribute`() {
         val rule = Regex("([^{}]+)\\{([^{}]*)\\}")

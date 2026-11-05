@@ -46,6 +46,10 @@ data class BrowserState(
     val mediaLocalFiles: Int = 0,
     val mediaLocalBytes: Long = 0L,
     val mediaFreeBytes: Long = 0L,
+    /** Why the last playlist fetch failed; empty when the last one succeeded. */
+    val playlistLastError: String = "",
+    /** How long the last playlist fetch took, in ms; 0 when never fetched. */
+    val playlistLastFetchMs: Long = 0L,
     val uiLanguage: String = "ms",
     val screenWidthDp: Int = 0,
     val screenHeightDp: Int = 0,

@@ -59,6 +59,8 @@ class StateJsonMediaTest {
         assertEquals(0.0, (values["mediaLocalFiles"] as Json.Value.Num).value, 0.0)
         assertEquals(0.0, (values["mediaLocalBytes"] as Json.Value.Num).value, 0.0)
         assertEquals(0.0, (values["mediaFreeBytes"] as Json.Value.Num).value, 0.0)
+        assertEquals("", (values["playlistLastError"] as Json.Value.Str).value)
+        assertEquals(0.0, (values["playlistLastFetchMs"] as Json.Value.Num).value, 0.0)
         assertEquals("ms", (values["uiLanguage"] as Json.Value.Str).value)
         assertEquals(0.0, (values["screenWidthDp"] as Json.Value.Num).value, 0.0)
         assertEquals(0.0, (values["screenHeightDp"] as Json.Value.Num).value, 0.0)
@@ -85,6 +87,8 @@ class StateJsonMediaTest {
             mediaLocalFiles = 4,
             mediaLocalBytes = 1_048_576L,
             mediaFreeBytes = 2_147_483_648L,
+            playlistLastError = "HTTP 503",
+            playlistLastFetchMs = 1_234L,
             uiLanguage = "ta",
             screenWidthDp = 1920,
             screenHeightDp = 1080,
@@ -107,6 +111,8 @@ class StateJsonMediaTest {
             0.0
         )
         assertEquals(1_048_576.0, (values["mediaLocalBytes"] as Json.Value.Num).value, 0.0)
+        assertEquals("HTTP 503", (values["playlistLastError"] as Json.Value.Str).value)
+        assertEquals(1_234.0, (values["playlistLastFetchMs"] as Json.Value.Num).value, 0.0)
         assertEquals("ta", (values["uiLanguage"] as Json.Value.Str).value)
         assertEquals(1920.0, (values["screenWidthDp"] as Json.Value.Num).value, 0.0)
         assertEquals(320.0, (values["densityDpi"] as Json.Value.Num).value, 0.0)
@@ -130,7 +136,8 @@ class StateJsonMediaTest {
             "mediaEnabled", "mediaMode", "mediaSource", "mediaItem", "mediaIndex",
             "mediaCount", "mediaPaused", "mediaError", "qmsNow", "qmsLocation",
             "qmsDetectionHealthy", "qmsLastCallAtMs", "documentStartSupported",
-            "mediaLocalFiles", "mediaLocalBytes", "mediaFreeBytes", "uiLanguage",
+            "mediaLocalFiles", "mediaLocalBytes", "mediaFreeBytes",
+            "playlistLastError", "playlistLastFetchMs", "uiLanguage",
             "screenWidthDp", "screenHeightDp", "densityDpi", "renderScale"
         )
     }

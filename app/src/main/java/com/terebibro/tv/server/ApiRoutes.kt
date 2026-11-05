@@ -18,6 +18,7 @@ import com.terebibro.tv.mqtt.MqttUpdate
 import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.util.SafeLog
+import com.terebibro.tv.web.BrowserState
 import com.terebibro.tv.web.UrlValidator
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
@@ -550,7 +551,7 @@ class ApiRoutes(
         val mode = state?.mediaMode ?: MediaMode.QMS_ONLY.wire
         val metrics = host.screenMetrics()
         val renderScale = MediaLayout.renderScale(metrics.heightDp).coerceAtLeast(1.0f)
-        return Http.ok(mediaFields(settings, mode, renderScale))
+        return Http.ok(mediaFields(settings, mode, renderScale, state))
     }
 
     /**
@@ -640,7 +641,12 @@ class ApiRoutes(
      * values live in their own object so a client echoing what it read cannot
      * trip `POST`'s unknown-key rejection.
      */
-    private fun mediaFields(settings: MediaSettings, mode: String, renderScale: Float): Map<String, Any?> =
+    private fun mediaFields(
+        settings: MediaSettings,
+        mode: String,
+        renderScale: Float,
+        state: BrowserState? = null
+    ): Map<String, Any?> =
         mapOf(
             "mediaModeEnabled" to settings.enabled,
             "qmsUrl" to settings.qmsUrl,
@@ -671,7 +677,12 @@ class ApiRoutes(
             "uiScale" to settings.uiScale,
             "runtime" to mapOf(
                 "mode" to mode,
-                "renderScale" to renderScale
+                "renderScale" to renderScale,
+                // Read-only source diagnostics, mirrored from the state
+                // broadcast so a fresh Media card shows them immediately.
+                "mediaSource" to (state?.mediaSource ?: ""),
+                "playlistLastError" to (state?.playlistLastError ?: ""),
+                "playlistLastFetchMs" to (state?.playlistLastFetchMs ?: 0L)
             )
         )
 

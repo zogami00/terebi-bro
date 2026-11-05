@@ -2,6 +2,12 @@ package com.terebibro.tv.media
 
 import android.os.Handler
 import android.os.Looper
+import com.terebibro.tv.web.UrlValidator
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.Executor
 
 /** The published playback view of the media layer. */
@@ -20,7 +26,11 @@ data class MediaRuntime(
     val qmsLocation: String = "",
     val qmsDetectionHealthy: Boolean = false,
     val qmsLastCallAtMs: Long = 0L,
-    val documentStartSupported: Boolean = false
+    val documentStartSupported: Boolean = false,
+    /** Why the last playlist fetch (or parse) failed; empty when it did not. */
+    val playlistLastError: String = "",
+    /** Wall time the last playlist fetch attempt took, in ms; 0 when never fetched. */
+    val playlistLastFetchMs: Long = 0L
 )
 
 /**
@@ -48,7 +58,13 @@ class MediaController(
     private val renderScale: () -> Float = { 1f },
     private val documentStartSupported: () -> Boolean = { false },
     /** `scheme://host[:port]` of the configured QMS page, or empty. */
-    private val qmsOrigin: () -> String = { "" }
+    private val qmsOrigin: () -> String = { "" },
+    /**
+     * Where the last-good playlist is kept (`filesDir/playlist-cache.json`).
+     * A 256 KiB cache file is not media, so it may live on internal storage;
+     * null disables caching, which only costs the offline cold boot.
+     */
+    private val playlistCacheFile: File? = null
 ) {
 
     private val main = Handler(Looper.getMainLooper())
@@ -94,6 +110,28 @@ class MediaController(
     private var localBytes = 0L
     private var freeBytes = 0L
 
+    /** The last local read's items; the unconditional fallback queue. */
+    private var localItems: List<MediaItem> = emptyList()
+
+    /** The last playlist that parsed, kept across a failed refresh. */
+    private var playlistItems: List<MediaItem> = emptyList()
+
+    /**
+     * Bumped for every playlist fetch, so a late response from a superseded
+     * settings change (or from before `release()`) is dropped on the floor.
+     */
+    private var playlistGeneration = 0L
+    private var playlistLastError = ""
+    private var playlistLastFetchMs = 0L
+
+    /**
+     * Remote items that failed in a row without a user action in between. A
+     * broken URL must advance the queue, but a whole playlist of broken URLs
+     * must not spin through it forever: after one full pass the queue stops
+     * and the error is published.
+     */
+    private var remoteFailures = 0
+
     // Detection memory. `hasMatchedSinceLaunch` and `detectionHealthy` are
     // reducer fields (qmsMatched / qmsDetectionHealthy); these are the values
     // the page reported and the key comparison needs.
@@ -134,6 +172,11 @@ class MediaController(
         dispatch(MediaEvent.DwellElapsed)
         applyPause(wasPaused)
         if (state.mode != previous) onChanged()
+    }
+
+    /** The periodic playlist refresh; re-armed after every completed fetch. */
+    private val playlistRefresh = Runnable {
+        if (state.enabled) refreshPlaylist(loadCacheFirst = false)
     }
 
     fun attach(host: MediaPlayerHost) {
@@ -312,7 +355,16 @@ class MediaController(
         if (!state.enabled) return
         // A library read may still be in flight; it must not replace this queue.
         storeGeneration++
-        queue = listOf(MediaItem(id = url, name = url, kind = MediaItem.Kind.VIDEO, durationMs = 0L))
+        queue = listOf(
+            MediaItem(
+                id = url,
+                name = url,
+                kind = MediaItem.Kind.VIDEO,
+                durationMs = 0L,
+                remote = true
+            )
+        )
+        remoteFailures = 0
         source = SOURCE_URL
         index = 0
         manualPaused = false
@@ -355,8 +407,28 @@ class MediaController(
         onChanged()
     }
 
+    /**
+     * A player failure. A local file that will not play stops the queue and
+     * waits for the operator (the file is on the TV, so a retry loop would
+     * only flash the same error).
+     *
+     * A remote item is different: the network may recover, so the queue
+     * advances to the next item instead of parking on a black surface. The
+     * error is still published, and the advance is bounded — after one full
+     * pass over the queue the failures stop and the published error stays.
+     */
     fun playbackError(message: String) {
         dispatch(MediaEvent.PlaybackError(message))
+        val item = currentItem
+        if (item != null && item.remote && queue.size > 1) {
+            remoteFailures++
+            if (remoteFailures < queue.size) {
+                advanceAfterRemoteError()
+                onChanged()
+                return
+            }
+            remoteFailures = 0
+        }
         manualPaused = true
         onChanged()
     }
@@ -414,7 +486,9 @@ class MediaController(
         qmsLocation = qmsLocation,
         qmsDetectionHealthy = state.qmsDetectionHealthy,
         qmsLastCallAtMs = qmsLastCallAtMs,
-        documentStartSupported = documentStartSupported()
+        documentStartSupported = documentStartSupported(),
+        playlistLastError = playlistLastError,
+        playlistLastFetchMs = playlistLastFetchMs
     )
 
     fun currentMode(): MediaMode = state.mode
@@ -423,6 +497,8 @@ class MediaController(
 
     fun release() {
         focusPaused = false
+        // A fetch already on the IO thread must not land after this point.
+        playlistGeneration++
         main.removeCallbacksAndMessages(null)
         imageDeadlineMs = 0L
         imageRemainingMs = 0L
@@ -435,10 +511,14 @@ class MediaController(
     // ---------------------------------------------------------------------
 
     private fun syncSettings() {
+        val previous = cfg
         cfg = settings()
         val wasEnabled = state.enabled
         dispatch(MediaEvent.Enabled(cfg.enabled))
         if (!cfg.enabled) {
+            // An error belonged to a playlist that is no longer configured; it
+            // must not survive on the published state.
+            playlistLastError = ""
             stopPlayback()
         } else {
             if (!wasEnabled) {
@@ -446,9 +526,48 @@ class MediaController(
                 focusPaused = false
             }
             host?.setVolume(cfg.volumePercent)
-            // Re-read the folder: a settings change is the point at which the
-            // library (and the free-space figures) are expected to be current.
+            // The "nothing playable" notice is patient-facing, so it follows
+            // the language selector instead of the layout's English default.
+            host?.setPlaceholderLabel(
+                SignageStrings.label(cfg.uiLanguage, SignageStrings.Key.MEDIA_UNAVAILABLE)
+            )
+            // Any settings change may have replaced the playlist URL, so an
+            // in-flight fetch belongs to a configuration that no longer exists.
+            playlistGeneration++
+            main.removeCallbacks(playlistRefresh)
+            val urlChanged = previous.playlistUrl != cfg.playlistUrl
+            if (urlChanged) {
+                // The last-good items were resolved against the old base URL;
+                // keeping them would play another playlist's entries.
+                playlistItems = emptyList()
+                // The cache holds absolute URLs for the same reason, so a cold
+                // start after the change would replay the previous playlist.
+                deletePlaylistCache()
+                playlistLastError = ""
+            }
+            // A disabled playlist cannot have a live error; drop the stale one
+            // so the controller never reports a configuration that is gone.
+            if (!cfg.playlistEnabled) playlistLastError = ""
+            // Re-read the folder first: a settings change is the point at which
+            // the library (and the free-space figures) are expected to be
+            // current, and the folder is always the fallback queue. It is
+            // queued before the playlist so a slow or hanging fetch (the `io`
+            // executor is single-threaded) cannot delay the fallback.
             reloadQueue(reset = !wasEnabled)
+            when {
+                // A cold start reads the cache first: a device that boots with
+                // no network must still play what it played yesterday.
+                !wasEnabled -> refreshPlaylist(loadCacheFirst = true)
+                urlChanged ||
+                    previous.playlistEnabled != cfg.playlistEnabled ||
+                    previous.playlistRefreshSec != cfg.playlistRefreshSec ->
+                    refreshPlaylist(loadCacheFirst = false)
+                // Every settings change discards the in-flight fetch above, so
+                // an active playlist is re-armed here; waiting for the periodic
+                // timer would leave it stale for up to `playlistRefreshSec`.
+                playlistActive() -> refreshPlaylist(loadCacheFirst = false)
+                else -> schedulePlaylistRefresh()
+            }
         }
         // Strip dimensions, labels and the language all live in settings, so a
         // settings change is also a stylesheet change.
@@ -468,7 +587,11 @@ class MediaController(
                 val free = store.freeBytes()
                 main.post {
                     if (generation != storeGeneration) return@post
-                    applyStore(items, total, free, reset, previousId, previousIndex, advanceOnMissing)
+                    localItems = items
+                    localFiles = items.size
+                    localBytes = total
+                    freeBytes = free
+                    applyActiveQueue(previousId, previousIndex, reset, advanceOnMissing)
                 }
             }
         } catch (e: Exception) {
@@ -476,19 +599,41 @@ class MediaController(
         }
     }
 
-    private fun applyStore(
-        items: List<MediaItem>,
-        total: Long,
-        free: Long,
-        reset: Boolean,
+    /**
+     * The playlist wins when it is enabled and has at least one parsed item;
+     * otherwise the local folder is the queue. The two are never merged.
+     */
+    private fun playlistActive(): Boolean =
+        cfg.playlistEnabled &&
+            cfg.playlistUrl.isNotEmpty() &&
+            UrlValidator.validate(cfg.playlistUrl) is UrlValidator.Result.Valid
+
+    /**
+     * Applies whichever source currently owns the queue.
+     *
+     * Playback is not interrupted when the playing item exists in the new
+     * queue: the item keeps its place wherever it moved to. Otherwise the
+     * previous index is clamped into the new list — a source switch advances
+     * from where it was, it never restarts from zero.
+     */
+    private fun applyActiveQueue(
         previousId: String?,
         previousIndex: Int,
+        reset: Boolean,
         advanceOnMissing: Boolean
     ) {
         if (!state.enabled) return
-        localFiles = items.size
-        localBytes = total
-        freeBytes = free
+        // An ad-hoc URL owns the queue until another source is chosen for it.
+        if (source == SOURCE_URL && queue.isNotEmpty() && !reset) {
+            onChanged()
+            return
+        }
+        val playlist = playlistItems.isNotEmpty() && playlistActive()
+        val items = when {
+            playlist -> playlistItems
+            cfg.mediaLocalEnabled -> localItems
+            else -> emptyList()
+        }
         queue = items
         if (items.isEmpty()) {
             source = ""
@@ -500,7 +645,7 @@ class MediaController(
             onChanged()
             return
         }
-        source = SOURCE_LOCAL
+        source = if (playlist) SOURCE_PLAYLIST else SOURCE_LOCAL
         index = MediaQueue.indexAfterReload(items, previousId, previousIndex, reset, advanceOnMissing)
         publishQueue()
         // Settings edits must not restart the clip that is already on screen;
@@ -509,9 +654,196 @@ class MediaController(
         onChanged()
     }
 
+    // ---------------------------------------------------------------------
+    // Playlist
+    // ---------------------------------------------------------------------
+
+    /**
+     * Fetches the playlist off the UI thread and applies it on main.
+     *
+     * [loadCacheFirst] is only set on the first load after startup: the cached
+     * last-good copy is applied before the network is even tried, so a cold
+     * boot with no network still has a queue.
+     */
+    private fun refreshPlaylist(loadCacheFirst: Boolean) {
+        if (!playlistActive()) return
+        val url = cfg.playlistUrl
+        val generation = ++playlistGeneration
+        val cacheFirst = loadCacheFirst && playlistItems.isEmpty()
+        try {
+            io.execute {
+                if (cacheFirst) {
+                    val cached = readPlaylistCache()
+                    if (cached != null) {
+                        main.post {
+                            if (generation != playlistGeneration || !state.enabled) return@post
+                            if (playlistItems.isEmpty()) applyPlaylistBody(cached, url, fromCache = true)
+                        }
+                    }
+                }
+                val startedAt = System.currentTimeMillis()
+                val outcome = fetchPlaylist(url)
+                val elapsed = System.currentTimeMillis() - startedAt
+                main.post {
+                    if (generation != playlistGeneration || !state.enabled) return@post
+                    playlistLastFetchMs = elapsed
+                    when (outcome) {
+                        is PlaylistFetch.Ok ->
+                            applyPlaylistBody(outcome.body, url, fromCache = false)
+                        is PlaylistFetch.Failed -> {
+                            // The last good playlist (memory, or the cache the
+                            // cold start just applied) stays the queue.
+                            playlistLastError = outcome.reason
+                            applyActiveQueue(currentItem?.id, index, reset = false, advanceOnMissing = true)
+                            onChanged()
+                        }
+                    }
+                    schedulePlaylistRefresh()
+                }
+            }
+        } catch (e: Exception) {
+            // The executor is shut down during onDestroy; nothing may start.
+        }
+    }
+
+    private fun applyPlaylistBody(body: String, base: String, fromCache: Boolean) {
+        when (val parsed = MediaPlaylist.parse(body, base)) {
+            is MediaPlaylist.Result.Invalid -> {
+                // A fetched body that parses to nothing is a *successful*
+                // answer — "this playlist has nothing playable" — not a
+                // transport failure. Keeping the last-good items would play a
+                // playlist the source no longer serves and would keep the local
+                // folder locked out forever, so the playlist is cleared here
+                // (memory and cache alike) and the local folder takes over,
+                // advancing from the current index clamped into the new queue.
+                // The same rule covers `[]` and an all-entries-invalid body.
+                // Last-good is kept only for `PlaylistFetch.Failed`.
+                playlistLastError = parsed.reason
+                playlistItems = emptyList()
+                deletePlaylistCache()
+                applyActiveQueue(currentItem?.id, index, reset = false, advanceOnMissing = true)
+                onChanged()
+            }
+            is MediaPlaylist.Result.Valid -> {
+                val changed = parsed.items != playlistItems
+                playlistLastError = ""
+                playlistItems = parsed.items
+                if (!fromCache) writePlaylistCache(parsed.items)
+                val playlistIsQueue = source == SOURCE_PLAYLIST
+                if (changed || (!playlistIsQueue && source != SOURCE_URL)) {
+                    applyActiveQueue(currentItem?.id, index, reset = false, advanceOnMissing = true)
+                } else {
+                    onChanged()
+                }
+            }
+        }
+    }
+
+    /** Re-arms the periodic refresh from now; every completed fetch calls it. */
+    private fun schedulePlaylistRefresh() {
+        main.removeCallbacks(playlistRefresh)
+        if (!state.enabled || !playlistActive()) return
+        val seconds = cfg.playlistRefreshSec.coerceIn(MIN_REFRESH_SEC, MAX_REFRESH_SEC)
+        main.postDelayed(playlistRefresh, seconds * 1000L)
+    }
+
+    private sealed class PlaylistFetch {
+        class Ok(val body: String) : PlaylistFetch()
+        class Failed(val reason: String) : PlaylistFetch()
+    }
+
+    /** One bounded GET. Runs on the IO executor only. */
+    private fun fetchPlaylist(url: String): PlaylistFetch {
+        var connection: HttpURLConnection? = null
+        return try {
+            val opened = URL(url).openConnection() as? HttpURLConnection
+                ?: return PlaylistFetch.Failed("Unsupported URL")
+            connection = opened
+            opened.connectTimeout = PLAYLIST_TIMEOUT_MS
+            opened.readTimeout = PLAYLIST_TIMEOUT_MS
+            opened.instanceFollowRedirects = true
+            opened.requestMethod = "GET"
+            opened.setRequestProperty("Accept", "application/json")
+            val code = opened.responseCode
+            if (code != HttpURLConnection.HTTP_OK) return PlaylistFetch.Failed("HTTP $code")
+            val body = opened.inputStream.use { MediaPlaylist.readBounded(it) }
+                ?: return PlaylistFetch.Failed("Playlist is larger than 256 KiB")
+            PlaylistFetch.Ok(body)
+        } catch (e: java.net.SocketTimeoutException) {
+            PlaylistFetch.Failed("Timed out")
+        } catch (e: Exception) {
+            PlaylistFetch.Failed(shortReason(e))
+        } finally {
+            try {
+                connection?.disconnect()
+            } catch (e: Exception) {
+                // Nothing to release.
+            }
+        }
+    }
+
+    private fun shortReason(e: Exception): String {
+        val message = e.message?.trim().orEmpty()
+        val text = if (message.isEmpty()) e.javaClass.simpleName else message
+        return text.take(120)
+    }
+
+    private fun readPlaylistCache(): String? {
+        val file = playlistCacheFile ?: return null
+        return PlaylistCache.read(file, MediaPlaylist.MAX_BYTES)
+    }
+
+    /**
+     * The cache is written back as a playlist body (`[{type,url,durationSec}]`),
+     * so a cold start re-parses it through exactly the same strict path. It is
+     * written on the IO executor: the queue must never wait for the disk.
+     */
+    private fun writePlaylistCache(items: List<MediaItem>) {
+        val file = playlistCacheFile ?: return
+        val body = try {
+            playlistBodyOf(items)
+        } catch (e: Exception) {
+            return
+        }
+        if (body.length > MediaPlaylist.MAX_BYTES) return
+        try {
+            io.execute { PlaylistCache.write(file, body) }
+        } catch (e: Exception) {
+            // Executor gone; the in-memory playlist is unaffected.
+        }
+    }
+
+    /**
+     * Drops the cached body. The cache is last-good state for a URL; once that
+     * URL is replaced or its playlist turns out to be empty it must not be
+     * replayed on the next cold boot.
+     */
+    private fun deletePlaylistCache() {
+        val file = playlistCacheFile ?: return
+        try {
+            io.execute { PlaylistCache.delete(file) }
+        } catch (e: Exception) {
+            // Executor gone; nothing to delete.
+        }
+    }
+
+    private fun playlistBodyOf(items: List<MediaItem>): String {
+        val array = JSONArray()
+        for (item in items) {
+            val entry = JSONObject()
+            entry.put("type", if (item.kind == MediaItem.Kind.IMAGE) "image" else "video")
+            entry.put("url", item.id)
+            entry.put("durationSec", (item.durationMs / 1000L).toInt())
+            array.put(entry)
+        }
+        return array.toString()
+    }
+
     private fun skip(step: Int) {
         if (!state.enabled || queue.isEmpty()) return
         val wasPaused = paused
+        // A deliberate move is a fresh attempt at a remote queue.
+        remoteFailures = 0
         index = MediaQueue.advance(index, queue.size, step)
         manualPaused = false
         publishQueue()
@@ -520,11 +852,29 @@ class MediaController(
         onChanged()
     }
 
+    /**
+     * The error path for a remote item: move to the next item and play it,
+     * without clearing the error that was just published and without
+     * restarting the still timer of the item that failed.
+     */
+    private fun advanceAfterRemoteError() {
+        imageDeadlineMs = 0L
+        imageRemainingMs = 0L
+        main.removeCallbacks(imageAdvance)
+        index = MediaQueue.advance(index, queue.size, 1)
+        publishQueue()
+        val item = currentItem ?: return
+        host?.play(item, cfg.volumePercent, cfg.mediaFillMode, loop = queue.size == 1)
+        if (paused) host?.pause() else scheduleImageTimer()
+    }
+
     private fun startCurrent() {
         main.removeCallbacks(imageAdvance)
         // A new item always gets a full dwell, never the previous still's rest.
         imageDeadlineMs = 0L
         imageRemainingMs = 0L
+        // A genuine start is a fresh attempt at a remote queue.
+        remoteFailures = 0
         val item = currentItem
         if (item == null) {
             host?.showPlaceholder()
@@ -533,15 +883,19 @@ class MediaController(
         manualPaused = false
         focusPaused = false
         if (state.lastError.isNotEmpty()) dispatch(MediaEvent.PlaybackRecovered)
-        host?.play(item, cfg.volumePercent, cfg.mediaFillMode)
+        // A one-item queue repeats itself; a longer one advances on completion,
+        // which a looping player would never report.
+        host?.play(item, cfg.volumePercent, cfg.mediaFillMode, loop = queue.size == 1)
         // A menu or the lifecycle may have been holding playback paused while
         // the item was chosen; the new item must start in that same state.
         if (paused) host?.pause() else scheduleImageTimer()
     }
 
     private fun stopPlayback() {
-        // Invalidate any library read that is still in flight.
+        // Invalidate any library read or playlist fetch that is still in flight.
         storeGeneration++
+        playlistGeneration++
+        main.removeCallbacks(playlistRefresh)
         main.removeCallbacks(imageAdvance)
         imageDeadlineMs = 0L
         imageRemainingMs = 0L
@@ -723,7 +1077,10 @@ class MediaController(
             if (armedRemaining > 0L) imageRemainingMs = armedRemaining
             return
         }
-        val fullMs = cfg.imageDurationSec.coerceAtLeast(1) * 1000L
+        // A playlist entry carries its own dwell; the global default is only
+        // the fallback for local files (which have no stored duration).
+        val fullMs = item.durationMs.takeIf { it > 0L }
+            ?: cfg.imageDurationSec.coerceAtLeast(1) * 1000L
         val delayMs = (remainingMs
             ?: armedRemaining.takeIf { it > 0L }
             ?: imageRemainingMs.takeIf { it > 0L }
@@ -735,6 +1092,14 @@ class MediaController(
 
     private companion object {
         const val SOURCE_LOCAL = "local"
+        const val SOURCE_PLAYLIST = "playlist"
         const val SOURCE_URL = "url"
+
+        /** Connect and read timeout for the playlist fetch, in milliseconds. */
+        const val PLAYLIST_TIMEOUT_MS = 10_000
+
+        /** Mirrors the validator's bounds; a stale value must not fetch in a loop. */
+        const val MIN_REFRESH_SEC = 30
+        const val MAX_REFRESH_SEC = 3600
     }
 }

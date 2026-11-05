@@ -282,6 +282,7 @@
     var keepAwake = $('keepAwakeToggle');
     if (keepAwake && document.activeElement !== keepAwake) keepAwake.checked = !!state.keepAwake;
     if (state.mediaMode) setMediaModeLine(state.mediaMode);
+    if (state.mediaSource !== undefined) setMediaSourceLine(state);
   }
 
   function refreshDevice() {
@@ -535,7 +536,9 @@
     imageDurationSec: 'mediaImageDurationInput',
     mediaFillMode: 'mediaFillModeInput',
     uiLanguage: 'mediaLanguageInput',
-    uiScale: 'mediaUiScaleInput'
+    uiScale: 'mediaUiScaleInput',
+    playlistUrl: 'playlistUrlInput',
+    playlistRefreshSec: 'playlistRefreshInput'
   };
 
   function clearMediaFieldErrors() {
@@ -578,8 +581,29 @@
       setSelectIfIdle('mediaFillModeInput', d.mediaFillMode);
       setSelectIfIdle('mediaLanguageInput', d.uiLanguage);
       setValueIfIdle('mediaUiScaleInput', d.uiScale);
+      setCheckIfIdle('playlistEnabledToggle', d.playlistEnabled);
+      setValueIfIdle('playlistUrlInput', d.playlistUrl);
+      setValueIfIdle('playlistRefreshInput', d.playlistRefreshSec);
       setMediaModeLine(runtime.mode);
+      setMediaSourceLine(runtime);
     });
+  }
+
+  /* Read-only source diagnostics, fed by both the state broadcast and the
+     settings runtime object. A server-provided string only ever reaches the
+     DOM through textContent. */
+  function setMediaSourceLine(source) {
+    var el = $('mediaSourceState');
+    if (!el || !source) return;
+    var name = source.mediaSource ? source.mediaSource : 'none';
+    var fetchedMs = Number(source.playlistLastFetchMs) || 0;
+    var error = source.playlistLastError;
+    var parts = ['Source: ' + name];
+    parts.push(fetchedMs > 0
+      ? 'last playlist fetch: ' + Math.round(fetchedMs) + ' ms'
+      : 'playlist not fetched yet');
+    if (error) parts.push('playlist error: ' + error);
+    el.textContent = parts.join(' \u2014 ');
   }
 
   /* A number input is either a valid integer or omitted from the payload. An
@@ -613,6 +637,12 @@
     putNumber(body, 'uiScale', 'mediaUiScaleInput');
     putString(body, 'mediaFillMode', 'mediaFillModeInput');
     putString(body, 'uiLanguage', 'mediaLanguageInput');
+    // The playlist URL is always sent, not omitted when empty: that is the
+    // documented way to clear a stale URL, and enabling the playlist without
+    // one is a named 400 rather than a silent no-op.
+    body.playlistEnabled = $('playlistEnabledToggle').checked;
+    body.playlistUrl = $('playlistUrlInput').value.trim();
+    putNumber(body, 'playlistRefreshSec', 'playlistRefreshInput');
     api('POST', '/api/settings/media', body).then(function (result) {
       if (result.status === 200 && result.json) {
         clearMediaFieldErrors();
@@ -923,6 +953,7 @@
 
     $('saveMedia').addEventListener('click', saveMedia);
     $('mediaEnabledToggle').addEventListener('change', saveMedia);
+    $('playlistEnabledToggle').addEventListener('change', saveMedia);
     $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });

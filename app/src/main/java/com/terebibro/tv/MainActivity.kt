@@ -62,6 +62,7 @@ import com.terebibro.tv.web.BrowserState
 import com.terebibro.tv.web.HomeUrlMatcher
 import com.terebibro.tv.web.UrlValidator
 import com.terebibro.tv.web.WebViewController
+import java.io.File
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -205,7 +206,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             evaluate = { script -> webViewController.evaluateQms(script) },
             renderScale = { screenRenderScale() },
             documentStartSupported = { webViewController.documentStartSupported() },
-            qmsOrigin = { qmsOriginOf(config.mediaSettings) }
+            qmsOrigin = { qmsOriginOf(config.mediaSettings) },
+            // The last-good playlist lives on internal storage: it is a small
+            // JSON cache, not media, and it must exist before any network does.
+            playlistCacheFile = File(filesDir, "playlist-cache.json")
         )
         val host = MediaPlayerHost(
             this,
@@ -1327,6 +1331,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             mediaLocalFiles = runtime.localFiles,
             mediaLocalBytes = runtime.localBytes,
             mediaFreeBytes = runtime.freeBytes,
+            playlistLastError = runtime.playlistLastError,
+            playlistLastFetchMs = runtime.playlistLastFetchMs,
             uiLanguage = media.uiLanguage.wire,
             screenWidthDp = metrics.widthDp,
             screenHeightDp = metrics.heightDp,

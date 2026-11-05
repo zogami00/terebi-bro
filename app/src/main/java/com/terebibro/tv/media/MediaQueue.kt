@@ -1,11 +1,20 @@
 package com.terebibro.tv.media
 
-/** One playable item. [id] is opaque; [name] is display-only. */
+/**
+ * One playable item. [id] is opaque; [name] is display-only.
+ *
+ * [remote] says how [id] is read: a name inside the local media folder
+ * (`false`) or an absolute `http`/`https` URL fetched by the player
+ * (`true`). Playlist entries and ad-hoc URLs are remote; library files are not.
+ * The distinction matters to [MediaPlayerHost], which must never look for a
+ * remote id on disk.
+ */
 data class MediaItem(
     val id: String,
     val name: String,
     val kind: Kind,
-    val durationMs: Long
+    val durationMs: Long,
+    val remote: Boolean = false
 ) {
     enum class Kind { VIDEO, IMAGE }
 }

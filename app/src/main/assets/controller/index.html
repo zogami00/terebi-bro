@@ -214,6 +214,21 @@
     <label for="mediaUiScaleInput">Vendor page scale %</label>
     <input id="mediaUiScaleInput" type="number" min="80" max="200" autocomplete="off">
 
+    <p class="warn">The HTTP playlist replaces the local folder while it has at
+    least one valid entry. A bad entry is skipped; an unreachable or invalid
+    playlist falls back to the folder, so the screen is never left blank. The
+    last good copy is kept on the TV for the next boot.</p>
+    <label class="check"><input id="playlistEnabledToggle" type="checkbox"> Use HTTP playlist</label>
+
+    <label for="playlistUrlInput">Playlist URL (http/https)</label>
+    <input id="playlistUrlInput" type="text" inputmode="url" autocomplete="off"
+           placeholder="https://example.com/playlist.json">
+
+    <label for="playlistRefreshInput">Playlist refresh (seconds)</label>
+    <input id="playlistRefreshInput" type="number" min="30" max="3600" autocomplete="off">
+
+    <p id="mediaSourceState" class="muted"></p>
+
     <div class="row">
       <button id="saveMedia" class="primary">Save Media</button>
     </div>
