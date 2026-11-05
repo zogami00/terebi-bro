@@ -4,11 +4,17 @@ import android.os.Handler
 import android.os.Looper
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
+import com.terebibro.tv.media.MediaLayout
+import com.terebibro.tv.media.MediaMode
+import com.terebibro.tv.media.MediaSettings
+import com.terebibro.tv.media.MediaSettingsValidator
+import com.terebibro.tv.media.MediaUpdate
 import com.terebibro.tv.mqtt.MqttSettingsValidator
 import com.terebibro.tv.mqtt.MqttUpdate
 import com.terebibro.tv.net.ClientNetworks
 import com.terebibro.tv.security.PairedToken
 import com.terebibro.tv.util.SafeLog
+import com.terebibro.tv.web.UrlValidator
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
@@ -104,6 +110,13 @@ class ApiRoutes(
                 handler = { _, _, v -> setMqttSettings(v) }
             )
         )
+
+        put(Method.GET to "/api/settings/media", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> mediaSettings() }))
+        put(
+            Method.POST to "/api/settings/media",
+            Route(Method.POST, true, MEDIA_SETTING_KEYS, handler = { _, _, v -> setMediaSettings(v) })
+        )
+        put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
 
         put(Method.GET to "/ws", Route(Method.GET, false, emptySet(), handler = { _, _, _ ->
             Http.error(Response.Status.BAD_REQUEST, "websocket_required", "Use a WebSocket upgrade")
@@ -462,6 +475,138 @@ class ApiRoutes(
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Media settings
+    // ---------------------------------------------------------------------
+
+    /** Every media setting plus the read-only runtime bits, never a secret. */
+    private fun mediaSettings(): Response {
+        val settings = host.mediaSettingsSnapshot()
+        val state = host.buildState()
+        val mode = state?.mediaMode ?: MediaMode.QMS_ONLY.wire
+        val metrics = host.screenMetrics()
+        val renderScale = MediaLayout.renderScale(metrics.heightDp).coerceAtLeast(1.0f)
+        return Http.ok(mediaFields(settings, mode, renderScale))
+    }
+
+    /**
+     * Updates the media settings as a whole. The supplied subset is merged over
+     * the stored settings and the merged result is validated, so the cross-field
+     * rules (band sum, playlist URL) hold for a partial update too. One bad
+     * field is `400` naming the field and nothing is written.
+     */
+    private fun setMediaSettings(values: Map<String, Json.Value>): Response {
+        val update = try {
+            MediaUpdate(
+                enabled = Json.optionalBool(values, "mediaModeEnabled"),
+                qmsUrl = Json.optionalString(values, "qmsUrl", UrlValidator.MAX_LENGTH),
+                qmsStripSelector = Json.optionalString(
+                    values, "qmsStripSelector", MediaSettingsValidator.MAX_SELECTOR_LENGTH
+                ),
+                qmsNumberSelector = Json.optionalString(
+                    values, "qmsNumberSelector", MediaSettingsValidator.MAX_SELECTOR_LENGTH
+                ),
+                qmsLocationSelector = Json.optionalString(
+                    values, "qmsLocationSelector", MediaSettingsValidator.MAX_SELECTOR_LENGTH
+                ),
+                qmsTimeSelector = Json.optionalString(
+                    values, "qmsTimeSelector", MediaSettingsValidator.MAX_SELECTOR_LENGTH
+                ),
+                callSource = Json.optionalString(values, "callSource", MAX_ENUM_WIRE),
+                dwellSec = Json.optionalInt(values, "dwellSec"),
+                mediaSplitPercent = Json.optionalInt(values, "mediaSplitPercent"),
+                headerBandPercent = Json.optionalInt(values, "headerBandPercent"),
+                stripHeightPercent = Json.optionalInt(values, "stripHeightPercent"),
+                currentNumberPx = Json.optionalInt(values, "currentNumberPx"),
+                historyNumberPx = Json.optionalInt(values, "historyNumberPx"),
+                labelPx = Json.optionalInt(values, "labelPx"),
+                currentCardPx = Json.optionalInt(values, "currentCardPx"),
+                historyCardMinPx = Json.optionalInt(values, "historyCardMinPx"),
+                historyCardMaxPx = Json.optionalInt(values, "historyCardMaxPx"),
+                uiLanguage = Json.optionalString(values, "uiLanguage", MAX_ENUM_WIRE),
+                mediaLocalEnabled = Json.optionalBool(values, "mediaLocalEnabled"),
+                playlistEnabled = Json.optionalBool(values, "playlistEnabled"),
+                playlistUrl = Json.optionalString(values, "playlistUrl", UrlValidator.MAX_LENGTH),
+                playlistRefreshSec = Json.optionalInt(values, "playlistRefreshSec"),
+                imageDurationSec = Json.optionalInt(values, "imageDurationSec"),
+                volumePercent = Json.optionalInt(values, "volumePercent"),
+                mediaFillMode = Json.optionalString(values, "mediaFillMode", MAX_ENUM_WIRE),
+                newCallHighlight = Json.optionalBool(values, "newCallHighlight"),
+                stripPosition = Json.optionalString(values, "stripPosition", MAX_ENUM_WIRE),
+                uiScale = Json.optionalInt(values, "uiScale")
+            )
+        } catch (e: Json.BadJson) {
+            return Http.error(Response.Status.BAD_REQUEST, "bad_request", e.message ?: "Invalid request body")
+        }
+
+        return when (val validated = MediaSettingsValidator.validate(update, config.mediaSettingsForUpdate)) {
+            is MediaSettingsValidator.Result.Invalid ->
+                Http.error(
+                    Response.Status.BAD_REQUEST,
+                    "bad_request",
+                    "${validated.field}: ${validated.message}"
+                )
+            is MediaSettingsValidator.Result.Valid -> {
+                config.applyMediaUpdate(validated.settings)
+                host.onMediaSettingsChanged()
+                mediaSettings()
+            }
+        }
+    }
+
+    /** A manual mode; `qms_focus` is the reducer's, not the operator's. */
+    private fun setMediaMode(values: Map<String, Json.Value>): Response {
+        val wire = Json.requireString(values, "mode", MAX_ENUM_WIRE).trim()
+        val mode = MediaMode.manualOrNull(wire)
+            ?: return Http.error(
+                Response.Status.BAD_REQUEST,
+                "bad_request",
+                "mode must be qms_only, media_only or split"
+            )
+        return respond(host.setMediaMode(mode))
+    }
+
+    /**
+     * The writable media settings plus the read-only `runtime` object. Read-only
+     * values live in their own object so a client echoing what it read cannot
+     * trip `POST`'s unknown-key rejection.
+     */
+    private fun mediaFields(settings: MediaSettings, mode: String, renderScale: Float): Map<String, Any?> =
+        mapOf(
+            "mediaModeEnabled" to settings.enabled,
+            "qmsUrl" to settings.qmsUrl,
+            "qmsStripSelector" to settings.qmsStripSelector,
+            "qmsNumberSelector" to settings.qmsNumberSelector,
+            "qmsLocationSelector" to settings.qmsLocationSelector,
+            "qmsTimeSelector" to settings.qmsTimeSelector,
+            "callSource" to settings.callSource.wire,
+            "dwellSec" to settings.dwellSec,
+            "mediaSplitPercent" to settings.mediaSplitPercent,
+            "headerBandPercent" to settings.headerBandPercent,
+            "stripHeightPercent" to settings.stripHeightPercent,
+            "currentNumberPx" to settings.currentNumberPx,
+            "historyNumberPx" to settings.historyNumberPx,
+            "labelPx" to settings.labelPx,
+            "currentCardPx" to settings.currentCardPx,
+            "historyCardMinPx" to settings.historyCardMinPx,
+            "historyCardMaxPx" to settings.historyCardMaxPx,
+            "uiLanguage" to settings.uiLanguage.wire,
+            "mediaLocalEnabled" to settings.mediaLocalEnabled,
+            "playlistEnabled" to settings.playlistEnabled,
+            "playlistUrl" to settings.playlistUrl,
+            "playlistRefreshSec" to settings.playlistRefreshSec,
+            "imageDurationSec" to settings.imageDurationSec,
+            "volumePercent" to settings.volumePercent,
+            "mediaFillMode" to settings.mediaFillMode.wire,
+            "newCallHighlight" to settings.newCallHighlight,
+            "stripPosition" to settings.stripPosition.wire,
+            "uiScale" to settings.uiScale,
+            "runtime" to mapOf(
+                "mode" to mode,
+                "renderScale" to renderScale
+            )
+        )
+
     private fun respond(result: ApiResult): Response = when (result) {
         is ApiResult.Ok -> Http.ok(result.fields)
         is ApiResult.Err -> Http.error(statusFor(result.status), result.code, result.message, result.retryAfterSec)
@@ -502,5 +647,17 @@ class ApiRoutes(
         /** Generous per-request bounds; [ClientNetworks.validateList] owns the 16-entry cap. */
         const val MAX_NETWORK_ENTRIES = 64
         const val MAX_NETWORK_CHARS = 64
+
+        const val MAX_ENUM_WIRE = 32
+
+        val MEDIA_SETTING_KEYS = setOf(
+            "mediaModeEnabled", "qmsUrl", "qmsStripSelector", "qmsNumberSelector",
+            "qmsLocationSelector", "qmsTimeSelector", "callSource", "dwellSec",
+            "mediaSplitPercent", "headerBandPercent", "stripHeightPercent",
+            "currentNumberPx", "historyNumberPx", "labelPx", "currentCardPx",
+            "historyCardMinPx", "historyCardMaxPx", "uiLanguage", "mediaLocalEnabled",
+            "playlistEnabled", "playlistUrl", "playlistRefreshSec", "imageDurationSec",
+            "volumePercent", "mediaFillMode", "newCallHighlight", "stripPosition", "uiScale"
+        )
     }
 }

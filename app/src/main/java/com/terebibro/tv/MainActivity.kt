@@ -28,6 +28,10 @@ import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
+import com.terebibro.tv.media.MediaLayout
+import com.terebibro.tv.media.MediaMode
+import com.terebibro.tv.media.MediaSettings
+import com.terebibro.tv.media.MediaStateMachine
 import com.terebibro.tv.mqtt.MqttAction
 import com.terebibro.tv.mqtt.MqttCommand
 import com.terebibro.tv.mqtt.MqttManager
@@ -42,6 +46,7 @@ import com.terebibro.tv.server.AuthManager
 import com.terebibro.tv.server.ControllerHost
 import com.terebibro.tv.server.ControllerServer
 import com.terebibro.tv.server.MainThreadBridge
+import com.terebibro.tv.server.ScreenMetrics
 import com.terebibro.tv.server.StateJson
 import com.terebibro.tv.server.WsHub
 import com.terebibro.tv.util.SafeLog
@@ -53,6 +58,7 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.roundToInt
 
 /**
  * Full screen, TV-first WebView host plus the embedded controller server,
@@ -132,6 +138,14 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private var retryRemaining = 0
     private var pageHasError = false
 
+    /** The mode currently on screen. Read from server threads for state snapshots. */
+    @Volatile
+    private var mediaMode: MediaMode = MediaMode.QMS_ONLY
+
+    /** Wall-clock end of the manual mode hold, 0 when no hold is in force. */
+    @Volatile
+    private var mediaManualUntilMs = 0L
+
     // ---------------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------------
@@ -144,6 +158,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         config = ConfigStore(this)
         deviceInfo = DeviceInfo(this)
         localNetwork = LocalNetwork(this)
+        mediaMode = if (config.mediaSettings.enabled) MediaMode.SPLIT else MediaMode.QMS_ONLY
         MainThreadBridge.host = WeakReference(this)
 
         applyKeepAwake(config.keepScreenAwake)
@@ -932,6 +947,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         val snapshot = webViewController.snapshot()
         val info = localNetwork.current()
         val webView = deviceInfo.webViewInfo()
+        val media = config.mediaSettings
+        val metrics = screenMetrics()
         return BrowserState(
             url = snapshot.url,
             title = snapshot.title,
@@ -953,7 +970,28 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             sdkInt = deviceInfo.sdkInt,
             uptimeMs = deviceInfo.uptimeMs,
             seq = seq.get(),
-            extraNetworks = config.extraClientNetworks
+            extraNetworks = config.extraClientNetworks,
+            mediaEnabled = media.enabled,
+            mediaMode = mediaMode.wire,
+            mediaSource = "",
+            mediaItem = "",
+            mediaIndex = 0,
+            mediaCount = 0,
+            mediaPaused = false,
+            mediaError = "",
+            qmsNow = "",
+            qmsLocation = "",
+            qmsDetectionHealthy = false,
+            qmsLastCallAtMs = 0L,
+            documentStartSupported = false,
+            mediaLocalFiles = 0,
+            mediaLocalBytes = 0L,
+            mediaFreeBytes = 0L,
+            uiLanguage = media.uiLanguage.wire,
+            screenWidthDp = metrics.widthDp,
+            screenHeightDp = metrics.heightDp,
+            densityDpi = metrics.densityDpi,
+            renderScale = MediaLayout.renderScale(metrics.heightDp).coerceAtLeast(1.0f)
         )
     }
 
@@ -1085,6 +1123,72 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         if (::mqttManager.isInitialized) mqttManager.restart()
     }
 
+    override fun mediaSettingsSnapshot(): MediaSettings =
+        MainThreadBridge.runOnMain { it.config.mediaSettings } ?: config.mediaSettings
+
+    override fun setMediaMode(mode: MediaMode): ApiResult =
+        MainThreadBridge.runOnMain { it.applyMediaMode(mode) }
+            ?: ApiResult.unavailable()
+
+    private fun applyMediaMode(mode: MediaMode): ApiResult {
+        if (mode == MediaMode.QMS_FOCUS) {
+            return ApiResult.badRequest("bad_request", "qms_focus is not a manual mode")
+        }
+        // A manual mode is meaningless while media mode is off: it would leave
+        // the state claiming `mediaEnabled:false` with a non-QMS mode. Check
+        // before mutating anything so a refused request has no side effects.
+        if (!config.mediaSettings.enabled) {
+            return ApiResult.conflict("media_disabled", "Enable media mode first")
+        }
+        mediaMode = mode
+        mediaManualUntilMs = when (mode) {
+            // The safe state (the queue stays visible) is held indefinitely.
+            MediaMode.QMS_ONLY -> MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS
+            // A media workspace: long enough to configure, bounded so it cannot
+            // hide the queue all day.
+            MediaMode.MEDIA_ONLY -> System.currentTimeMillis() + MediaStateMachine.MANUAL_MEDIA_HOLD_MS
+            // The automatic default: choosing it drops any hold.
+            MediaMode.SPLIT -> 0L
+            MediaMode.QMS_FOCUS -> 0L
+        }
+        seq.incrementAndGet()
+        broadcastState()
+        return ApiResult.ok("mode" to mode.wire, "heldUntilMs" to mediaManualUntilMs)
+    }
+
+    override fun onMediaSettingsChanged() {
+        // ControllerHost methods run on server threads; every field below is
+        // UI-thread state, so the whole body hops to the main thread.
+        MainThreadBridge.post { applyMediaSettingsChangedOnMain() }
+    }
+
+    private fun applyMediaSettingsChangedOnMain() {
+        if (!config.mediaSettings.enabled) {
+            mediaMode = MediaMode.QMS_ONLY
+            mediaManualUntilMs = 0L
+        } else if (mediaMode == MediaMode.QMS_ONLY && mediaManualUntilMs == 0L) {
+            mediaMode = MediaMode.SPLIT
+        }
+        seq.incrementAndGet()
+        broadcastState()
+    }
+
+    override fun screenMetrics(): ScreenMetrics =
+        MainThreadBridge.runOnMain { it.displayMetricsOnMain() } ?: FALLBACK_SCREEN_METRICS
+
+    private fun displayMetricsOnMain(): ScreenMetrics {
+        val metrics = resources.displayMetrics
+        val density = if (metrics.density > 0f) metrics.density else 1f
+        // A reported dimension of 0 would be published as a zero band height
+        // and a zero render scale; fall back rather than emit it.
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return FALLBACK_SCREEN_METRICS
+        return ScreenMetrics(
+            widthDp = (metrics.widthPixels / density).roundToInt(),
+            heightDp = (metrics.heightPixels / density).roundToInt(),
+            densityDpi = metrics.densityDpi
+        )
+    }
+
     // ---------------------------------------------------------------------
     // MqttManager.Dispatcher
     // ---------------------------------------------------------------------
@@ -1181,5 +1285,12 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     private companion object {
         const val TAG = "MainActivity"
+
+        /**
+         * Last-resort metrics for when the main-thread hop times out: the
+         * 1080p mdpi authoring surface. Used only so a reported `renderScale`
+         * is never `0.0` and `screenHeightDp` is never zero.
+         */
+        val FALLBACK_SCREEN_METRICS = ScreenMetrics(widthDp = 1920, heightDp = 1080, densityDpi = 160)
     }
 }

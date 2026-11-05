@@ -192,6 +192,7 @@
       refreshDevice();
       refreshNetworks();
       refreshMqtt();
+      refreshMedia();
     } else if (message.type === 'state') {
       updateState(message.state);
     } else if (message.type === 'event') {
@@ -279,6 +280,7 @@
     if (fullscreen && document.activeElement !== fullscreen) fullscreen.checked = !!state.fullscreen;
     var keepAwake = $('keepAwakeToggle');
     if (keepAwake && document.activeElement !== keepAwake) keepAwake.checked = !!state.keepAwake;
+    if (state.mediaMode) setMediaModeLine(state.mediaMode);
   }
 
   function refreshDevice() {
@@ -506,6 +508,130 @@
     });
   }
 
+  /* -------------------------------------------------------------------- media */
+
+  function setCheckIfIdle(id, value) {
+    var el = $(id);
+    if (el && document.activeElement !== el) el.checked = !!value;
+  }
+
+  function setSelectIfIdle(id, value) {
+    var el = $(id);
+    if (el && document.activeElement !== el) el.value = value === undefined || value === null ? '' : String(value);
+  }
+
+  function setMediaModeLine(mode) {
+    setText('mediaModeState', 'Mode: ' + (mode || 'qms_only'));
+  }
+
+  var MEDIA_FIELD_IDS = {
+    mediaModeEnabled: 'mediaEnabledToggle',
+    mediaSplitPercent: 'mediaSplitInput',
+    headerBandPercent: 'mediaHeaderInput',
+    stripHeightPercent: 'mediaStripInput',
+    dwellSec: 'mediaDwellInput',
+    volumePercent: 'mediaVolumeInput',
+    imageDurationSec: 'mediaImageDurationInput',
+    mediaFillMode: 'mediaFillModeInput',
+    uiLanguage: 'mediaLanguageInput',
+    uiScale: 'mediaUiScaleInput'
+  };
+
+  function clearMediaFieldErrors() {
+    var notes = document.querySelectorAll('.media-field-error');
+    for (var i = 0; i < notes.length; i++) notes[i].parentNode.removeChild(notes[i]);
+  }
+
+  /* The server names the offending field as "field: reason"; place that text
+     directly after the input it belongs to, falling back to the card error. */
+  function showMediaError(message) {
+    clearMediaFieldErrors();
+    var error = $('mediaError');
+    error.textContent = '';
+    var text = message || 'Request failed';
+    var match = /^([A-Za-z]+):/.exec(text);
+    var id = match ? MEDIA_FIELD_IDS[match[1]] : null;
+    var input = id ? $(id) : null;
+    if (!input || !input.parentNode) {
+      error.textContent = text;
+      return;
+    }
+    var note = document.createElement('p');
+    note.className = 'error media-field-error';
+    note.textContent = text;
+    input.parentNode.insertBefore(note, input.nextSibling);
+  }
+
+  function refreshMedia() {
+    api('GET', '/api/settings/media', undefined).then(function (result) {
+      if (result.status !== 200 || !result.json) return;
+      var d = result.json;
+      var runtime = d.runtime || {};
+      setCheckIfIdle('mediaEnabledToggle', d.mediaModeEnabled);
+      setValueIfIdle('mediaSplitInput', d.mediaSplitPercent);
+      setValueIfIdle('mediaHeaderInput', d.headerBandPercent);
+      setValueIfIdle('mediaStripInput', d.stripHeightPercent);
+      setValueIfIdle('mediaDwellInput', d.dwellSec);
+      setValueIfIdle('mediaVolumeInput', d.volumePercent);
+      setValueIfIdle('mediaImageDurationInput', d.imageDurationSec);
+      setSelectIfIdle('mediaFillModeInput', d.mediaFillMode);
+      setSelectIfIdle('mediaLanguageInput', d.uiLanguage);
+      setValueIfIdle('mediaUiScaleInput', d.uiScale);
+      setMediaModeLine(runtime.mode);
+    });
+  }
+
+  /* A number input is either a valid integer or omitted from the payload. An
+     explicit null would be a strict-parser type error naming no field. */
+  function putNumber(body, key, id) {
+    var text = String($(id).value).trim();
+    if (text === '') return;
+    var value = parseInt(text, 10);
+    if (isFinite(value)) body[key] = value;
+  }
+
+  function putString(body, key, id) {
+    var value = $(id).value;
+    if (value !== '') body[key] = value;
+  }
+
+  /* The whole media block is one request: a partial update is validated against
+     the merged settings on the server, so the band sum is checked as a whole.
+     Empty inputs are left out rather than sent as null. */
+  function saveMedia() {
+    var error = $('mediaError');
+    error.textContent = '';
+    clearMediaFieldErrors();
+    var body = { mediaModeEnabled: $('mediaEnabledToggle').checked };
+    putNumber(body, 'mediaSplitPercent', 'mediaSplitInput');
+    putNumber(body, 'headerBandPercent', 'mediaHeaderInput');
+    putNumber(body, 'stripHeightPercent', 'mediaStripInput');
+    putNumber(body, 'dwellSec', 'mediaDwellInput');
+    putNumber(body, 'volumePercent', 'mediaVolumeInput');
+    putNumber(body, 'imageDurationSec', 'mediaImageDurationInput');
+    putNumber(body, 'uiScale', 'mediaUiScaleInput');
+    putString(body, 'mediaFillMode', 'mediaFillModeInput');
+    putString(body, 'uiLanguage', 'mediaLanguageInput');
+    api('POST', '/api/settings/media', body).then(function (result) {
+      if (result.status === 200 && result.json) {
+        clearMediaFieldErrors();
+        refreshMedia();
+      } else {
+        showMediaError(apiError(result));
+      }
+    });
+  }
+
+  function requestMediaMode(mode) {
+    api('POST', '/api/media/mode', { mode: mode }).then(function (result) {
+      if (result.status === 200 && result.json) {
+        setMediaModeLine(result.json.mode || mode);
+      } else {
+        banner(apiError(result));
+      }
+    });
+  }
+
   /* ------------------------------------------------------------------ actions */
 
   function navigate(path, body, method) {
@@ -593,6 +719,12 @@
     $('saveMqtt').addEventListener('click', saveMqtt);
     $('clearMqttPassword').addEventListener('click', clearMqttPassword);
 
+    $('saveMedia').addEventListener('click', saveMedia);
+    $('mediaEnabledToggle').addEventListener('change', saveMedia);
+    $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
+    $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
+    $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });
+
     $('unpairButton').addEventListener('click', unpair);
   }
 
@@ -605,6 +737,7 @@
     refreshDevice();
     refreshNetworks();
     refreshMqtt();
+    refreshMedia();
     api('GET', '/api/state', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.state) updateState(result.json.state);
     });
