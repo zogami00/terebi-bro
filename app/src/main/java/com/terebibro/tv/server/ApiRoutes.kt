@@ -1,13 +1,17 @@
 package com.terebibro.tv.server
 
+import android.media.MediaMetadataRetriever
 import android.os.Handler
 import android.os.Looper
 import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
+import com.terebibro.tv.media.MediaFileInfo
+import com.terebibro.tv.media.MediaFileRules
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaSettingsValidator
+import com.terebibro.tv.media.MediaStore
 import com.terebibro.tv.media.MediaUpdate
 import com.terebibro.tv.mqtt.MqttSettingsValidator
 import com.terebibro.tv.mqtt.MqttUpdate
@@ -20,7 +24,15 @@ import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedOutputStream
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.net.URLDecoder
+import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The exact REST surface from the V1 spec.
@@ -38,6 +50,7 @@ class ApiRoutes(
     private val host: ControllerHost,
     private val wsHub: WsHub,
     private val assets: AssetSource,
+    private val mediaStore: MediaStore,
     private val canBindPort: (Int) -> Boolean,
     private val onPortChanged: () -> Unit
 ) {
@@ -49,6 +62,13 @@ class ApiRoutes(
         /** Keys whose value is a string array rather than a scalar. */
         val arrayKeys: Set<String> = emptySet(),
         val isDpad: Boolean = false,
+        /**
+         * A binary body: framed by [BodyFraming.decideUpload] and streamed by the
+         * handler instead of being read as JSON.
+         */
+        val binary: Boolean = false,
+        /** Uses the dedicated 6/min upload bucket instead of the shared API one. */
+        val uploadLimit: Boolean = false,
         val handler: (IHTTPSession, PairedToken?, Map<String, Json.Value>) -> Response
     )
 
@@ -119,6 +139,30 @@ class ApiRoutes(
         put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
         put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url"), handler = { _, _, v -> mediaOpen(v) }))
 
+        // Library. The upload is the one binary request; the JSON framing rule
+        // would reject its content type, so it gets the upload framing instead.
+        put(Method.GET to "/api/media/files", Route(Method.GET, true, emptySet(), handler = { _, _, _ -> mediaFiles() }))
+        put(
+            Method.POST to "/api/media/upload",
+            Route(
+                Method.POST,
+                true,
+                emptySet(),
+                binary = true,
+                uploadLimit = true,
+                handler = { s, _, _ -> mediaUpload(s) }
+            )
+        )
+        put(
+            Method.POST to "/api/media/delete",
+            Route(Method.POST, true, setOf("name"), handler = { _, _, v -> mediaDelete(v) })
+        )
+        // Preview is a whole-file GET: binary framing, no JSON, no Range.
+        put(
+            Method.GET to "/api/media/file",
+            Route(Method.GET, true, emptySet(), binary = true, handler = { s, _, _ -> mediaFile(s) })
+        )
+
         put(Method.GET to "/ws", Route(Method.GET, false, emptySet(), handler = { _, _, _ ->
             Http.error(Response.Status.BAD_REQUEST, "websocket_required", "Use a WebSocket upgrade")
         }))
@@ -166,12 +210,21 @@ class ApiRoutes(
         }
 
         // (5) body framing rules; the body itself is not read until authenticated
-        val decision = BodyFraming.decide(
-            method = method.name,
-            jsonContentType = Http.isJsonContentType(session.headers["content-type"]),
-            contentLengthHeader = session.headers["content-length"],
-            transferEncodingHeader = session.headers["transfer-encoding"]
-        )
+        val decision = if (route.binary) {
+            BodyFraming.decideUpload(
+                method = method.name,
+                contentLengthHeader = session.headers["content-length"],
+                transferEncodingHeader = session.headers["transfer-encoding"],
+                maxBytes = MediaFileRules.Caps.MAX_BYTES
+            )
+        } else {
+            BodyFraming.decide(
+                method = method.name,
+                jsonContentType = Http.isJsonContentType(session.headers["content-type"]),
+                contentLengthHeader = session.headers["content-length"],
+                transferEncodingHeader = session.headers["transfer-encoding"]
+            )
+        }
         if (decision is BodyFraming.Decision.Reject) {
             return closeIfNeeded(session, Http.error(statusFor(decision.status), decision.code, decision.message))
         }
@@ -187,16 +240,26 @@ class ApiRoutes(
             )
         }
 
-        // (7) rate limit
-        if (!auth.rateLimit(token, peerIp, route.isDpad)) {
+        // (7) rate limit — the upload route has its own 6/min bucket
+        val allowed = if (route.uploadLimit) {
+            auth.rateLimitUpload(token, peerIp)
+        } else {
+            auth.rateLimit(token, peerIp, route.isDpad)
+        }
+        if (!allowed) {
             return closeIfNeeded(
                 session,
-                Http.error(Response.Status.TOO_MANY_REQUESTS, "rate_limited", "Too many requests", retryAfterSec = 1)
+                Http.error(
+                    Response.Status.TOO_MANY_REQUESTS,
+                    "rate_limited",
+                    "Too many requests",
+                    retryAfterSec = if (route.uploadLimit) 10 else 1
+                )
             )
         }
 
         // (8) read the body (only now that the peer is authenticated), then strict JSON
-        val body: ByteArray? = if (declaredLength > 0) readBody(session, declaredLength) else null
+        val body: ByteArray? = if (!route.binary && declaredLength > 0) readBody(session, declaredLength) else null
         val values: Map<String, Json.Value> = if (body != null) {
             try {
                 Json.parseObject(ByteArrayInputStream(body), route.allowedKeys, route.arrayKeys)
@@ -612,6 +675,317 @@ class ApiRoutes(
             )
         )
 
+    // ---------------------------------------------------------------------
+    // Media library
+    // ---------------------------------------------------------------------
+
+    /**
+     * The library listing. Sizes are read from the files themselves; the
+     * totals and the free-space figure are the same values the state publishes.
+     */
+    private fun mediaFiles(): Response = Http.ok(
+        mapOf(
+            "files" to mediaFilesJson(mediaStore.describe()),
+            "totalBytes" to mediaStore.totalBytes(),
+            "freeBytes" to mediaStore.freeBytes(),
+            "maxFiles" to MediaFileRules.Caps.MAX_FILES,
+            "maxTotalBytes" to MediaFileRules.Caps.MAX_TOTAL_BYTES
+        )
+    )
+
+    private fun mediaFilesJson(files: List<MediaFileInfo>): JSONArray {
+        val arr = JSONArray()
+        for (file in files) {
+            val obj = JSONObject()
+            obj.put("name", file.name)
+            obj.put("bytes", file.bytes)
+            obj.put("kind", file.kind.name.lowercase())
+            obj.put("modifiedMs", file.modifiedMs)
+            arr.put(obj)
+        }
+        return arr
+    }
+
+    /**
+     * Streams one uploaded file to a `.part` file in the media folder. The
+     * body is never buffered whole: only the first 4 KiB are kept for the magic
+     * byte check. Quota and reserve are checked before the first byte.
+     */
+    private fun mediaUpload(session: IHTTPSession): Response {
+        val name = requestedName(session)
+            ?: return closeIfNeeded(
+                session,
+                Http.error(Response.Status.BAD_REQUEST, "bad_filename", "Invalid filename")
+            )
+        val length = session.headers["content-length"]?.toLongOrNull()
+            ?: return closeIfNeeded(
+                session,
+                Http.error(Response.Status.LENGTH_REQUIRED, "length_required", "Content-Length required")
+            )
+
+        // One upload at a time: a second concurrent request would race the
+        // quota arithmetic and the free-space reserve.
+        if (!uploadInProgress.compareAndSet(false, true)) {
+            return closeIfNeeded(
+                session,
+                Http.error(Response.Status.CONFLICT, "upload_in_progress", "Another upload is in progress")
+            )
+        }
+
+        var temp: File? = null
+        try {
+            // Media is only ever written to external app storage. A missing
+            // volume is a 507, never a write beside SharedPreferences.
+            val dir = mediaStore.dir()
+                ?: return closeIfNeeded(
+                    session,
+                    Http.insufficientStorage("storage_unavailable", "Media storage is unavailable")
+                )
+
+            if (mediaStore.file(name) != null) {
+                return closeIfNeeded(
+                    session,
+                    Http.error(Response.Status.CONFLICT, "duplicate_name", "A file with that name already exists")
+                )
+            }
+
+            val verdict = MediaFileRules.accepts(
+                count = mediaStore.describe().size,
+                totalBytes = mediaStore.totalBytes(),
+                freeBytes = mediaStore.freeBytes(),
+                incoming = length
+            )
+            when (verdict) {
+                MediaFileRules.Verdict.TooManyFiles -> return closeIfNeeded(
+                    session,
+                    Http.insufficientStorage("too_many_files", "The library is full")
+                )
+                MediaFileRules.Verdict.OverQuota -> return closeIfNeeded(
+                    session,
+                    Http.insufficientStorage("quota_exceeded", "Library quota exceeded")
+                )
+                MediaFileRules.Verdict.NoSpace -> return closeIfNeeded(
+                    session,
+                    Http.insufficientStorage("disk_full", "Not enough free space")
+                )
+                MediaFileRules.Verdict.TooLarge -> return closeIfNeeded(
+                    session,
+                    Http.error(Response.Status.PAYLOAD_TOO_LARGE, "payload_too_large", "File too large")
+                )
+                MediaFileRules.Verdict.Ok -> Unit
+            }
+
+            val upload = File(dir, ".upload-${UUID.randomUUID()}.part")
+            temp = upload
+            when (val streamed = streamToFile(session, upload, length)) {
+                is StreamOutcome.Mismatch -> {
+                    // Bytes may remain on the connection: it must not be
+                    // reused, or the tail could be parsed as a new request.
+                    val mismatch = Http.error(
+                        Response.Status.BAD_REQUEST,
+                        "bad_request",
+                        "Upload ended early or exceeded its declared length"
+                    )
+                    mismatch.closeConnection(true)
+                    return mismatch
+                }
+                is StreamOutcome.Complete -> {
+                    // The extension and the actual container must agree; this
+                    // is the real content gate, not the extension alone.
+                    if (!MediaFileRules.contentMatchesExtension(name, streamed.magic)) {
+                        return Http.error(
+                            Response.Status.UNSUPPORTED_MEDIA_TYPE,
+                            "unsupported_media_type",
+                            "File content does not match its extension"
+                        )
+                    }
+                    // Best-effort sanity probe before the file enters the
+                    // library. It is not a guarantee: some valid containers
+                    // report no probeable metadata, so only a definite
+                    // exception or a definite zero result is refused.
+                    if (!probeMediaFile(upload)) {
+                        return Http.error(
+                            Response.Status.UNSUPPORTED_MEDIA_TYPE,
+                            "unsupported_media_type",
+                            "File cannot be decoded"
+                        )
+                    }
+                }
+            }
+
+            val item = try {
+                mediaStore.upload(upload, name)
+            } catch (e: MediaStore.DuplicateNameException) {
+                return Http.error(
+                    Response.Status.CONFLICT,
+                    "duplicate_name",
+                    "A file with that name already exists"
+                )
+            } catch (e: IOException) {
+                return Http.error(
+                    Response.Status.INTERNAL_ERROR,
+                    "upload_failed",
+                    "Could not store the upload"
+                )
+            }
+
+            host.onMediaLibraryChanged()
+            return Http.ok(
+                mapOf(
+                    "name" to item.name,
+                    "bytes" to length,
+                    "kind" to item.kind.name.lowercase(),
+                    "totalBytes" to mediaStore.totalBytes(),
+                    "freeBytes" to mediaStore.freeBytes()
+                )
+            )
+        } finally {
+            uploadInProgress.set(false)
+            // On success the rename moved the file and this is a no-op; on
+            // every failure path the partial file is removed here.
+            temp?.let {
+                try {
+                    if (it.exists()) it.delete()
+                } catch (ignored: Exception) {
+                    // ignore
+                }
+            }
+        }
+    }
+
+    /** Deletes by name; an unknown or unsafe name is a uniform 404. */
+    private fun mediaDelete(values: Map<String, Json.Value>): Response {
+        val raw = Json.requireString(values, "name", MAX_FILENAME_HEADER)
+        val name = MediaFileRules.sanitize(raw)
+            ?: return Http.error(Response.Status.NOT_FOUND, "not_found", "File not found")
+        if (!mediaStore.delete(name)) {
+            return Http.error(Response.Status.NOT_FOUND, "not_found", "File not found")
+        }
+        host.onMediaLibraryChanged()
+        return Http.ok(mapOf("files" to mediaFilesJson(mediaStore.describe())))
+    }
+
+    /** Serves one stored file whole; preview is capped and never ranged. */
+    private fun mediaFile(session: IHTTPSession): Response {
+        val name = requestedName(session)
+            ?: return Http.error(Response.Status.NOT_FOUND, "not_found", "File not found")
+        val file = mediaStore.file(name)
+            ?: return Http.error(Response.Status.NOT_FOUND, "not_found", "File not found")
+        val length = file.length()
+        if (length > MediaFileRules.Caps.PREVIEW_MAX_BYTES) {
+            return Http.error(
+                Response.Status.PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "File is too large to preview"
+            )
+        }
+        val contentType = MediaFileRules.contentTypeOf(name)
+            ?: return Http.error(Response.Status.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type", "Unsupported type")
+        return Http.binaryResponse(Response.Status.OK, contentType, length) { FileInputStream(file) }
+    }
+
+    /**
+     * The percent-encoded filename header, decoded once and validated. The
+     * 160-character bound applies to the encoded header; the sanitised name is
+     * bounded again by [MediaFileRules.sanitize].
+     */
+    private fun requestedName(session: IHTTPSession): String? {
+        val raw = session.headers["x-terebi-filename"] ?: return null
+        if (raw.isEmpty() || raw.length > MAX_FILENAME_HEADER) return null
+        val decoded = try {
+            URLDecoder.decode(raw, "UTF-8")
+        } catch (e: Exception) {
+            return null
+        }
+        return MediaFileRules.sanitize(decoded)
+    }
+
+    /** The result of streaming an upload body to its temporary file. */
+    private sealed class StreamOutcome {
+        /** Exactly the declared body was written; [magic] holds the sniff prefix. */
+        data class Complete(val magic: ByteArray, val written: Long) : StreamOutcome()
+
+        /** The body ended early, ran past its declared length, or hit the cap. */
+        object Mismatch : StreamOutcome()
+    }
+
+    /**
+     * Copies the request body to [target], retaining the first 4 KiB for
+     * sniffing. The copy is bounded by `MAX_BYTES` and by the declared length;
+     * the number of bytes actually written is counted and must equal
+     * [declared]. A short body is a mismatch, and bytes that were already
+     * buffered past the declared end also fail, because the caller must close
+     * the connection rather than let the tail be parsed as a new request.
+     */
+    private fun streamToFile(session: IHTTPSession, target: File, declared: Long): StreamOutcome {
+        val magic = ByteArray(SNIFF_BYTES)
+        var magicLength = 0
+        var written = 0L
+        val cap = MediaFileRules.Caps.MAX_BYTES
+        val limit = minOf(declared, cap)
+        try {
+            BufferedOutputStream(FileOutputStream(target)).use { out ->
+                val buffer = ByteArray(64 * 1024)
+                val input = session.inputStream
+                while (written < limit) {
+                    val want = minOf(buffer.size.toLong(), limit - written).toInt()
+                    val read = input.read(buffer, 0, want)
+                    if (read < 0) break
+                    out.write(buffer, 0, read)
+                    if (magicLength < magic.size) {
+                        val copy = minOf(read, magic.size - magicLength)
+                        System.arraycopy(buffer, 0, magic, magicLength, copy)
+                        magicLength += copy
+                    }
+                    written += read
+                }
+                if (written == declared && input.available() > 0) {
+                    // The client declared less than it sent. The extra bytes are
+                    // still buffered, so this connection cannot be kept alive.
+                    return StreamOutcome.Mismatch
+                }
+            }
+        } catch (e: IOException) {
+            return StreamOutcome.Mismatch
+        }
+        return if (written == declared) {
+            StreamOutcome.Complete(magic.copyOf(magicLength), written)
+        } else {
+            StreamOutcome.Mismatch
+        }
+    }
+
+    /**
+     * Best-effort `MediaMetadataRetriever` sanity check on the finished `.part`
+     * file. It runs on the server's request thread (never the UI thread) and is
+     * documented as best-effort: an exception or a definite zero width/height
+     * *and* zero duration is refused, but a container the retriever cannot
+     * introspect on this device may still be valid. It is a gate against a
+     * renamed or truncated file, not a decode guarantee.
+     */
+    private fun probeMediaFile(file: File): Boolean = try {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            val width = (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_IMAGE_WIDTH))
+                ?.toIntOrNull() ?: 0
+            val height = (retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_IMAGE_HEIGHT))
+                ?.toIntOrNull() ?: 0
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+            (width > 0 && height > 0) || duration > 0L
+        } finally {
+            retriever.release()
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /** One upload at a time, so a second request is a clean 409. */
+    private val uploadInProgress = AtomicBoolean(false)
+
     private fun respond(result: ApiResult): Response = when (result) {
         is ApiResult.Ok -> Http.ok(result.fields)
         is ApiResult.Err -> Http.error(statusFor(result.status), result.code, result.message, result.retryAfterSec)
@@ -625,10 +999,12 @@ class ApiRoutes(
         405 -> Response.Status.METHOD_NOT_ALLOWED
         409 -> Response.Status.CONFLICT
         410 -> Response.Status.GONE
+        411 -> Response.Status.LENGTH_REQUIRED
         413 -> Response.Status.PAYLOAD_TOO_LARGE
         415 -> Response.Status.UNSUPPORTED_MEDIA_TYPE
         429 -> Response.Status.TOO_MANY_REQUESTS
         503 -> Response.Status.SERVICE_UNAVAILABLE
+        507 -> Http.INSUFFICIENT_STORAGE
         else -> Response.Status.INTERNAL_ERROR
     }
 
@@ -654,6 +1030,10 @@ class ApiRoutes(
         const val MAX_NETWORK_CHARS = 64
 
         const val MAX_ENUM_WIRE = 32
+
+        /** Encoded `X-Terebi-Filename` bound, and the magic-byte prefix kept. */
+        const val MAX_FILENAME_HEADER = 160
+        const val SNIFF_BYTES = 4096
 
         val MEDIA_SETTING_KEYS = setOf(
             "mediaModeEnabled", "qmsUrl", "qmsStripSelector", "qmsNumberSelector",

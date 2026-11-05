@@ -241,6 +241,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             host = this,
             wsHub = wsHub,
             assets = AssetSource(this),
+            mediaStore = mediaStore,
             canBindPort = { port -> controllerServer.canBindPort(port) },
             onPortChanged = {
                 runOnIo {
@@ -288,6 +289,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         mqttManager.start()
 
         io.execute {
+            // Remove `.part` leftovers from an interrupted upload off the UI
+            // thread, before the controller server can accept a new upload.
+            mediaStore.sweepPartFiles()
             controllerServer.rebind()
             localNetwork.current()?.let { mdns.start(it.ip) }
         }
@@ -1504,6 +1508,19 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         seq.incrementAndGet()
         broadcastState()
         return ApiResult.ok("mode" to applied.wire, "heldUntilMs" to mediaController.manualUntilMs())
+    }
+
+    /**
+     * A library upload or delete succeeded. The queue is re-read on the IO
+     * executor (inside the controller) and re-applied on main; the playing item
+     * is kept when it still exists. Nothing is started here on the UI thread.
+     */
+    override fun onMediaLibraryChanged() {
+        MainThreadBridge.post {
+            mediaController.onLibraryChanged()
+            seq.incrementAndGet()
+            broadcastState()
+        }
     }
 
     override fun onMediaSettingsChanged() {

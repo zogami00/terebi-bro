@@ -323,6 +323,24 @@ class MediaController(
         onChanged()
     }
 
+    /**
+     * The library changed through an upload or a delete. The queue is re-read
+     * off the UI thread and re-applied on main: the playing item is kept when
+     * it still exists, and playback advances to the item that took its place
+     * when it was the one deleted. An unrelated change never restarts the clip.
+     *
+     * While an ad-hoc URL is playing the library is not the queue, so only the
+     * counters are refreshed: an upload must not yank the URL off screen.
+     */
+    fun onLibraryChanged() {
+        if (!state.enabled) return
+        if (source == SOURCE_URL && queue.isNotEmpty()) {
+            refreshStats()
+        } else {
+            reloadQueue(reset = false, advanceOnMissing = true)
+        }
+    }
+
     fun overlay(visible: Boolean) {
         val wasPaused = paused
         dispatch(MediaEvent.Overlay(visible))
@@ -438,8 +456,9 @@ class MediaController(
         onChanged()
     }
 
-    private fun reloadQueue(reset: Boolean) {
+    private fun reloadQueue(reset: Boolean, advanceOnMissing: Boolean = false) {
         val previousId = currentItem?.id
+        val previousIndex = index
         val generation = ++storeGeneration
         // Three directory walks plus StatFs: never on the UI thread.
         try {
@@ -449,7 +468,7 @@ class MediaController(
                 val free = store.freeBytes()
                 main.post {
                     if (generation != storeGeneration) return@post
-                    applyStore(items, total, free, reset, previousId)
+                    applyStore(items, total, free, reset, previousId, previousIndex, advanceOnMissing)
                 }
             }
         } catch (e: Exception) {
@@ -462,7 +481,9 @@ class MediaController(
         total: Long,
         free: Long,
         reset: Boolean,
-        previousId: String?
+        previousId: String?,
+        previousIndex: Int,
+        advanceOnMissing: Boolean
     ) {
         if (!state.enabled) return
         localFiles = items.size
@@ -480,7 +501,7 @@ class MediaController(
             return
         }
         source = SOURCE_LOCAL
-        index = if (reset) 0 else items.indexOfFirst { it.id == previousId }.coerceAtLeast(0)
+        index = MediaQueue.indexAfterReload(items, previousId, previousIndex, reset, advanceOnMissing)
         publishQueue()
         // Settings edits must not restart the clip that is already on screen;
         // only a changed or missing item starts playback again.

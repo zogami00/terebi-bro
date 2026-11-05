@@ -47,8 +47,60 @@ object BodyFraming {
         if (transferEncodingHeader != null) {
             return Decision.Reject(413, "payload_too_large", "Chunked bodies are not accepted")
         }
-        val length = contentLengthHeader?.toLongOrNull()
-        if (length != null && length != 0L) {
+        val header = contentLengthHeader ?: return Decision.NoBody
+        // An unreadable length means the body's extent is unknown: reject and
+        // let the caller close, rather than leaving an unread tail on the socket.
+        val length = header.toLongOrNull()
+            ?: return Decision.Reject(400, "bad_request", "Invalid Content-Length")
+        if (length != 0L) {
+            return Decision.Reject(413, "payload_too_large", "Unexpected request body")
+        }
+        return Decision.NoBody
+    }
+
+    /**
+     * Framing for the binary upload/preview routes. An upload is a POST whose
+     * body is streamed straight to disk, so the JSON content-type rule of
+     * [decide] does not apply; the length rules still do.
+     *
+     * Only a POST may carry a body. A non-POST route (the preview GET) is a
+     * body-less read: a declared body or chunked encoding is refused exactly as
+     * [decide] refuses it, so the binary path cannot smuggle a second request.
+     *
+     * Unlike [decide], a missing or unparseable length is `411 Length Required`
+     * rather than `413`, because without a length the upload cannot be bounded
+     * before the first byte is written.
+     */
+    fun decideUpload(
+        method: String,
+        contentLengthHeader: String?,
+        transferEncodingHeader: String?,
+        maxBytes: Long
+    ): Decision {
+        if (method == "POST") {
+            if (transferEncodingHeader != null) {
+                return Decision.Reject(413, "payload_too_large", "Chunked bodies are not accepted")
+            }
+            val header = contentLengthHeader
+                ?: return Decision.Reject(411, "length_required", "Content-Length required")
+            val length = header.toLongOrNull()
+                ?: return Decision.Reject(411, "length_required", "Invalid Content-Length")
+            if (length < 0) {
+                return Decision.Reject(411, "length_required", "Invalid Content-Length")
+            }
+            if (length > maxBytes) {
+                return Decision.Reject(413, "payload_too_large", "Body exceeds $maxBytes bytes")
+            }
+            return if (length == 0L) Decision.NoBody else Decision.Read(length.toInt())
+        }
+
+        if (transferEncodingHeader != null) {
+            return Decision.Reject(413, "payload_too_large", "Chunked bodies are not accepted")
+        }
+        val header = contentLengthHeader ?: return Decision.NoBody
+        val length = header.toLongOrNull()
+            ?: return Decision.Reject(400, "bad_request", "Invalid Content-Length")
+        if (length != 0L) {
             return Decision.Reject(413, "payload_too_large", "Unexpected request body")
         }
         return Decision.NoBody
@@ -60,7 +112,9 @@ object BodyFraming {
         transferEncodingHeader: String?
     ): Boolean {
         if (transferEncodingHeader != null) return true
-        val length = contentLengthHeader?.toLongOrNull() ?: return false
+        val header = contentLengthHeader ?: return false
+        // Unparseable framing leaves an unknown amount unread: close.
+        val length = header.toLongOrNull() ?: return true
         return length > 0
     }
 }

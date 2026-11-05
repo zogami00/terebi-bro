@@ -68,6 +68,13 @@ interface ControllerHost {
     /** Plays an ad-hoc URL on the media band; `invalid_url` for a non-http(s) value. */
     fun openMediaUrl(url: String): ApiResult
 
+    /**
+     * Called after a library upload or delete succeeded, so the media layer
+     * re-reads the folder. Playback keeps the current item when it still
+     * exists; an unrelated change never restarts it.
+     */
+    fun onMediaLibraryChanged()
+
     /** The dp metrics the layout is authored against. */
     fun screenMetrics(): ScreenMetrics
 }

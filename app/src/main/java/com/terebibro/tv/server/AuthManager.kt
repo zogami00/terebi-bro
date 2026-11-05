@@ -52,6 +52,14 @@ class AuthManager(
     private val apiLimiter = RateLimiter(ratePerSecond = 20.0, burst = 20)
     private val dpadLimiter = RateLimiter(ratePerSecond = 100.0, burst = 100)
 
+    /**
+     * The upload route has its own bucket: six uploads per minute per token, as
+     * the media library design specifies. It deliberately does not share the
+     * 20/s API bucket, so a burst of small control calls cannot exhaust uploads
+     * (and an upload cannot slow control traffic).
+     */
+    private val uploadLimiter = RateLimiter(ratePerSecond = UPLOAD_RATE_PER_SECOND, burst = UPLOAD_BURST)
+
     /** Addresses most recently refused by [isPeerAllowed]; in-memory only, never persisted. */
     private val recentlyBlocked = RecentlyBlockedPeers()
 
@@ -133,6 +141,14 @@ class AuthManager(
     fun rateLimit(key: String, isDpad: Boolean): Boolean =
         if (isDpad) dpadLimiter.allow(key) else apiLimiter.allow(key)
 
+    /**
+     * The upload route's dedicated bucket (six per minute, token-keyed). A
+     * caller without a token falls back to the peer address, exactly like the
+     * shared limiter, though the route itself requires a token first.
+     */
+    fun rateLimitUpload(token: PairedToken?, peerIp: String?): Boolean =
+        uploadLimiter.allow(token?.sha256Hex ?: peerIp ?: "anonymous")
+
     // ---------------------------------------------------------------------
     // Pairing
     // ---------------------------------------------------------------------
@@ -186,6 +202,10 @@ class AuthManager(
      * delegate here, so the release and debug paths cannot diverge.
      */
     companion object {
+
+        /** Six uploads per minute, with a burst of six. */
+        const val UPLOAD_RATE_PER_SECOND = 6.0 / 60.0
+        const val UPLOAD_BURST = 6
 
         /**
          * Loopback, own-address and off-subnet peers are rejected. When

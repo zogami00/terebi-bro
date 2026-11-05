@@ -11,11 +11,24 @@ object Http {
     const val JSON_MIME = "application/json; charset=utf-8"
 
     /** The controller holds a bearer token in localStorage, so lock the document down. */
-    private const val HTML_CSP =
-        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
-            "connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    const val HTML_CSP =
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; " +
+            "media-src 'self' blob:; connect-src 'self' ws: wss:; base-uri 'none'; " +
+            "form-action 'none'; frame-ancestors 'none'"
 
     private const val NON_HTML_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+    /**
+     * NanoHTTPD 2.3.1 has no 507 in its fixed [Response.Status] enum, so the
+     * storage-refusal status is defined here. It is used when a quota or the
+     * free-space reserve would be breached, and when external storage is
+     * missing; a `409` would wrongly suggest the request could be retried
+     * unchanged.
+     */
+    val INSUFFICIENT_STORAGE: Response.IStatus = object : Response.IStatus {
+        override fun getDescription(): String = "Insufficient Storage"
+        override fun getRequestStatus(): Int = 507
+    }
 
     fun jsonResponse(json: String, status: Response.IStatus): Response =
         NanoHTTPD.newFixedLengthResponse(status, JSON_MIME, json).withSecurityHeaders("no-store")
@@ -49,6 +62,31 @@ object Http {
 
     fun serviceUnavailable(code: String = "unavailable", message: String = "TV not ready"): Response =
         error(Response.Status.SERVICE_UNAVAILABLE, code, message)
+
+    /** 507: a storage quota, reserve or missing volume refuses the operation. */
+    fun insufficientStorage(code: String, message: String): Response =
+        error(INSUFFICIENT_STORAGE, code, message)
+
+    /**
+     * A fixed-length binary response streamed from [stream]. The caller owns
+     * the file and closes it through NanoHTTPD's stream handling; no range
+     * support is advertised because preview is a whole-file read.
+     */
+    fun binaryResponse(
+        status: Response.IStatus,
+        contentType: String,
+        length: Long,
+        stream: () -> java.io.InputStream
+    ): Response {
+        val response = NanoHTTPD.newFixedLengthResponse(status, contentType, stream(), length)
+        response.addHeader("X-Content-Type-Options", "nosniff")
+        response.addHeader("Content-Disposition", "inline")
+        response.addHeader("Cache-Control", "no-store")
+        response.addHeader("Accept-Ranges", "none")
+        response.addHeader("X-Frame-Options", "DENY")
+        response.addHeader("Referrer-Policy", "no-referrer")
+        return response
+    }
 
     fun staticResponse(status: Response.IStatus, mime: String, body: String): Response {
         val response = NanoHTTPD.newFixedLengthResponse(status, mime, body)

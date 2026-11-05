@@ -240,7 +240,8 @@ class MediaPlayerHost(
         if (item.id.startsWith("http://") || item.id.startsWith("https://")) {
             return Uri.parse(item.id)
         }
-        val file = File(store.dir(), item.id)
+        val base = store.dir() ?: return null
+        val file = File(base, item.id)
         return if (file.isFile) Uri.fromFile(file) else null
     }
 
@@ -253,7 +254,12 @@ class MediaPlayerHost(
         backdropView.visibility = View.GONE
         imageView.visibility = View.VISIBLE
         applyFill(MediaLayout.fillFor(fillMode))
-        val file = File(store.dir(), item.id)
+        val base = store.dir()
+        if (base == null) {
+            fail("Media storage is unavailable")
+            return
+        }
+        val file = File(base, item.id)
         val token = generation
         val (targetWidth, targetHeight) = targetSize()
         try {

@@ -193,6 +193,7 @@
       refreshNetworks();
       refreshMqtt();
       refreshMedia();
+      refreshLibrary();
     } else if (message.type === 'state') {
       updateState(message.state);
     } else if (message.type === 'event') {
@@ -632,6 +633,207 @@
     });
   }
 
+  /* ------------------------------------------------------------------ library */
+
+  var libraryFiles = [];
+  var previewUrl = null;
+  var previewName = '';
+
+  function formatBytes(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    var units = ['KB', 'MB', 'GB'];
+    var i = -1;
+    do { n = n / 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return (n < 10 ? n.toFixed(1) : String(Math.round(n))) + ' ' + units[i];
+  }
+
+  function setUploadError(message) {
+    var el = $('libraryError');
+    if (el) el.textContent = message || '';
+  }
+
+  function setUploadProgress(text) {
+    var el = $('uploadProgress');
+    if (el) el.textContent = text || '';
+  }
+
+  /* The preview is a Blob object URL; it is revoked as soon as it is replaced
+     so a phone does not pin the decoded file in memory. */
+  function clearPreview() {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+    previewName = '';
+    var box = $('libraryPreview');
+    if (box) { while (box.firstChild) box.removeChild(box.firstChild); }
+  }
+
+  /* Server-derived values only ever reach the DOM through textContent. */
+  function renderLibrary(files) {
+    libraryFiles = (files || []).slice();
+    var summary = $('librarySummary');
+    if (summary) {
+      summary.textContent = libraryFiles.length === 0
+        ? 'No media yet.'
+        : libraryFiles.length + ' file' + (libraryFiles.length === 1 ? '' : 's') + ' in the library.';
+    }
+    var ul = $('libraryList');
+    if (!ul) return;
+    while (ul.firstChild) ul.removeChild(ul.firstChild);
+    libraryFiles.forEach(function (file) {
+      var li = document.createElement('li');
+      var info = document.createElement('span');
+      info.className = 'grow';
+      info.textContent = file.name + ' \u2014 ' + formatBytes(file.bytes) + ' (' + file.kind + ')';
+      var preview = document.createElement('button');
+      preview.textContent = 'Preview';
+      preview.addEventListener('click', function () { previewFile(file); });
+      var del = document.createElement('button');
+      del.className = 'danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', function () { deleteLibraryFile(file.name); });
+      li.appendChild(info);
+      li.appendChild(preview);
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  function refreshLibrary() {
+    api('GET', '/api/media/files', undefined).then(function (result) {
+      if (result.status === 200 && result.json && result.json.files) {
+        renderLibrary(result.json.files);
+      }
+    });
+  }
+
+  function deleteLibraryFile(name) {
+    setUploadError('');
+    api('POST', '/api/media/delete', { name: name }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.files) {
+        if (previewName === name) clearPreview();
+        renderLibrary(result.json.files);
+      } else {
+        setUploadError(apiError(result));
+      }
+    });
+  }
+
+  function previewFile(file) {
+    setUploadError('');
+    // Bearer token in a header, never in a URL: the preview is a fetch, not a
+    // navigation, and no credential or filename reaches the address bar.
+    fetch('/api/media/file', {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'X-Terebi-CSRF': '1',
+        // The server resolves the file from this header only; without it the
+        // preview is a 404. The name never travels in the URL.
+        'X-Terebi-Filename': encodeURIComponent(file.name)
+      },
+      cache: 'no-store'
+    }).then(function (response) {
+      if (!response.ok) throw new Error('Preview failed (' + response.status + ')');
+      return response.blob();
+    }).then(function (blob) {
+      clearPreview();
+      previewUrl = URL.createObjectURL(blob);
+      previewName = file.name;
+      var box = $('libraryPreview');
+      var media;
+      if (file.kind === 'video') {
+        media = document.createElement('video');
+        media.controls = true;
+      } else {
+        media = document.createElement('img');
+        media.alt = file.name;
+      }
+      media.src = previewUrl;
+      media.style.maxWidth = '100%';
+      media.style.maxHeight = '240px';
+      media.style.marginTop = '12px';
+      media.style.borderRadius = '8px';
+      box.appendChild(media);
+    }).catch(function (error) {
+      setUploadError(error && error.message ? error.message : 'Preview failed');
+    });
+  }
+
+  /* One request per file, sequential, so the server's single-upload rule is
+     never tripped by our own concurrency. The filename travels in the
+     percent-encoded header, never in the URL. */
+  function uploadFiles() {
+    var input = $('libraryFileInput');
+    var files = input && input.files ? input.files : null;
+    setUploadError('');
+    if (!files || files.length === 0) {
+      setUploadError('Choose at least one file to upload.');
+      return;
+    }
+    var list = [];
+    for (var i = 0; i < files.length; i++) list.push(files[i]);
+    var index = 0;
+    var firstError = '';
+
+    function next() {
+      if (index >= list.length) {
+        setUploadProgress('Upload finished.');
+        input.value = '';
+        refreshLibrary();
+        return;
+      }
+      uploadOne(list[index++], function (message) {
+        if (message && !firstError) firstError = message;
+        if (firstError) setUploadError(firstError);
+        next();
+      });
+    }
+
+    function uploadOne(file, done) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/media/upload');
+      xhr.setRequestHeader(CSRF_HEADER, '1');
+      if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+      xhr.setRequestHeader('X-Terebi-Filename', encodeURIComponent(file.name));
+      // A stalled connection must not hold the server's single upload slot for
+      // ever; the server also releases it on every failure path.
+      xhr.timeout = 120000;
+      xhr.upload.onprogress = function (event) {
+        if (event.lengthComputable && event.total > 0) {
+          var pct = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress('Uploading ' + file.name + ' \u2014 ' + pct + '%');
+        } else {
+          setUploadProgress('Uploading ' + file.name + '\u2026');
+        }
+      };
+      xhr.onload = function () {
+        var json = null;
+        try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; }
+        if (xhr.status === 200 && json && json.ok) {
+          setUploadProgress('Uploaded ' + file.name + '.');
+          done('');
+        } else {
+          var message = json && json.error
+            ? (json.error.message || json.error.code)
+            : 'Upload failed (' + xhr.status + ')';
+          done(file.name + ': ' + message);
+        }
+      };
+      xhr.onerror = function () {
+        done(file.name + ': upload failed');
+      };
+      xhr.ontimeout = function () {
+        done(file.name + ': upload timed out');
+      };
+      xhr.send(file);
+    }
+
+    next();
+  }
+
   /* ------------------------------------------------------------------ actions */
 
   function navigate(path, body, method) {
@@ -725,6 +927,8 @@
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });
 
+    $('uploadButton').addEventListener('click', uploadFiles);
+
     $('unpairButton').addEventListener('click', unpair);
   }
 
@@ -738,6 +942,7 @@
     refreshNetworks();
     refreshMqtt();
     refreshMedia();
+    refreshLibrary();
     api('GET', '/api/state', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.state) updateState(result.json.state);
     });

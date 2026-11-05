@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <title>Terebi Bro controller</title>
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -218,6 +218,20 @@
       <button id="saveMedia" class="primary">Save Media</button>
     </div>
     <p id="mediaError" class="error"></p>
+  </section>
+
+  <section class="card">
+    <h2>Library</h2>
+    <p id="librarySummary" class="muted">No media yet.</p>
+    <div class="row wrap">
+      <input id="libraryFileInput" type="file" class="grow"
+             accept="video/mp4,image/jpeg,image/png" multiple>
+      <button id="uploadButton" class="primary">Upload</button>
+    </div>
+    <p id="uploadProgress" class="muted"></p>
+    <p id="libraryError" class="error"></p>
+    <ul id="libraryList" class="netlist"></ul>
+    <div id="libraryPreview"></div>
   </section>
 
   <section class="card">
