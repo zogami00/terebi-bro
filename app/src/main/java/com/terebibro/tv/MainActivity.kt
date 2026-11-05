@@ -27,6 +27,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.webkit.WebChromeClient
+import android.webkit.WebView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import com.terebibro.tv.BuildConfig
@@ -1151,6 +1152,25 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         mediaContainer.layoutParams = mediaParams
         webViewContainer.layoutParams = webParams
 
+        // `MEDIA_ONLY` hides the QMS surface outright, not just behind the
+        // band: a page that is only covered keeps its own visibility, its Split
+        // bounds and its place in the focus search. This function is the single
+        // place that sets the container back to VISIBLE, so hiding it here (and
+        // asserting it below) covers the fullscreen dismissal, the rebuild and
+        // the boot-rule paths — all of them re-apply this layout.
+        val qmsHidden = MediaWebPolicy.hidesQmsSurface(mode)
+        webViewController.setContentVisible(!qmsHidden)
+        if (qmsHidden) webViewContainer.visibility = View.GONE
+
+        // The band owns the geometry. The page is re-filled on every pass so a
+        // page created while the container was the Split band cannot keep that
+        // height after the mode changed.
+        if (::mediaWebSurface.isInitialized) mediaWebSurface.applyBandLayout()
+
+        // Assertion-style guard: no layout apply may leave any of the QMS
+        // surface visible while the mode says the media band has the screen.
+        assertQmsHiddenInMediaOnly(mode)
+
         // A page in MEDIA_ONLY owns the D-pad itself. The container is
         // focusable so a native item has somewhere to land, but while the page
         // is showing it must not compete: a focused container would take the
@@ -1158,7 +1178,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // soon as the page stops being the band's source.
         val mediaPageActive = mode == MediaMode.MEDIA_ONLY && mediaController.isWebSource()
         mediaContainer.isFocusable = !mediaPageActive
-        if (mediaPageActive && mediaFullscreenView == null && mediaContainer.hasFocus()) {
+        // The page must end this pass focused, otherwise the first D-pad press
+        // has nowhere to land. The surface requests focus now and again after
+        // the layout this function just requested, so the assertion survives
+        // the new bounds.
+        if (mediaPageActive && mediaFullscreenView == null && !anyOverlayVisible()) {
             mediaController.refocusWeb()
         }
 
@@ -1178,6 +1202,62 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             }
         }
         updateMediaMenuVisibility()
+        logMediaLayoutOnMain(mode)
+    }
+
+    /**
+     * Debug-only proof line for the layout pass. It is posted once, after the
+     * pass runs, because the page's height is only the new mode's once it has
+     * been measured and laid out.
+     */
+    private fun logMediaLayoutOnMain(mode: MediaMode) {
+        if (!BuildConfig.DEBUG) return
+        mediaContainer.post { logMediaLayout(mode) }
+    }
+
+    private fun logMediaLayout(mode: MediaMode) {
+        val page = if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null
+        val pageState = if (page == null) "absent" else "${visibilityName(page.visibility)} h=${page.height}"
+        SafeLog.d(
+            TAG,
+            "media layout mode=${mode.wire} " +
+                "webviewContainer=${visibilityName(webViewContainer.visibility)} " +
+                "mediaWeb=$pageState focus=${focusOwner()}"
+        )
+    }
+
+    private fun visibilityName(visibility: Int): String = when (visibility) {
+        View.VISIBLE -> "VISIBLE"
+        View.INVISIBLE -> "INVISIBLE"
+        else -> "GONE"
+    }
+
+    /** Which view holds focus, named without any page content. */
+    private fun focusOwner(): String {
+        val focused = currentFocus ?: return "none"
+        val mediaPage = if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null
+        return when {
+            focused === mediaPage -> "media_web"
+            focused is WebView -> "qms_web"
+            focused === mediaContainer -> "media_container"
+            else -> focused.javaClass.simpleName
+        }
+    }
+
+    /**
+     * Assertion-style guard for the invariant "a layout apply in `MEDIA_ONLY`
+     * leaves the QMS surface `GONE`". A late callback re-showing it is repaired
+     * rather than thrown: a kiosk must not crash into a black screen over a
+     * stale visibility bit. The debug line above records the state either way.
+     */
+    private fun assertQmsHiddenInMediaOnly(mode: MediaMode) {
+        if (!MediaWebPolicy.hidesQmsSurface(mode)) return
+        val containerHidden = webViewContainer.visibility == View.GONE
+        val pageHidden = webViewController.contentVisibility() != View.VISIBLE
+        if (containerHidden && pageHidden) return
+        SafeLog.w(TAG, "QMS surface was left visible in MEDIA_ONLY; hiding it")
+        webViewContainer.visibility = View.GONE
+        webViewController.setContentVisible(false)
     }
 
     // ---------------------------------------------------------------------

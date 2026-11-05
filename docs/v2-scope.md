@@ -630,6 +630,12 @@ through a phone while the panel shows a strip.
 - **Back in `MEDIA_ONLY`** closes the panel if it is open, otherwise returns to
   `SPLIT`. Without this rung, Back would fall through to the WebView ladder and
   navigate the QMS page away from the dashboard.
+- **The QMS page is hidden outright in `MEDIA_ONLY`** — its container and the
+  page are both `GONE`, and the layout pass asserts it — so the band's page is
+  the only WebView on screen, filling `media_container` and holding focus. A
+  page that was only covered kept its Split height and could still take the
+  remote; the debug `media layout …` line reports the mode, both visibilities,
+  the page's height and the focused view after every pass.
 
 ## Detection
 

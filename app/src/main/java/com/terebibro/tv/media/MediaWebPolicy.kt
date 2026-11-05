@@ -25,6 +25,17 @@ object MediaWebPolicy {
         (mode == MediaMode.MEDIA_ONLY || mode == MediaMode.SPLIT)
 
     /**
+     * Whether the QMS surface must be hidden outright rather than covered.
+     *
+     * `MEDIA_ONLY` gives the media band the whole screen; the QMS page is not
+     * part of that layout at all. Leaving it merely behind the band is what the
+     * device measured as a second, still focusable WebView at the old Split
+     * height, so the container **and** its page are hidden in this mode (layout
+     * re-assertion and the debug layout line both key off this predicate).
+     */
+    fun hidesQmsSurface(mode: MediaMode): Boolean = mode == MediaMode.MEDIA_ONLY
+
+    /**
      * The kiosk re-asserts immersive mode whenever its window regains focus,
      * except while the soft keyboard is visible: hiding the system bars there
      * dismisses the IME the user is typing with. Once the keyboard is gone the

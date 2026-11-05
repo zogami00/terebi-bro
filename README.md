@@ -434,6 +434,17 @@ native player path.
   if the page ignores it, so it cannot fall through to the hidden QMS page. The
   same routing keeps working while the page's own HTML5 fullscreen view covers
   the band: the keys still go to the page's `WebView` behind that view.
+- The **QMS surface is genuinely gone in `media_only`**, not merely covered.
+  `webview_container` is `GONE` and the QMS page itself is `GONE`, so it can
+  neither take a key nor keep the Split band's height; the layout pass asserts
+  that invariant every time it runs (a violation is repaired and logged, never
+  thrown). The band's page re-applies its `MATCH_PARENT` `LayoutParams` on every
+  mode change, and is re-focused after that pass (with a posted second request),
+  because a page created while the container was the Split band otherwise keeps
+  the old bounds and the old focus. A debug-only `media layout …` line records
+  the mode, `webview_container` visibility, the page's visibility and height,
+  and the focused view after each pass, which is how the fix is confirmed on the
+  device.
 - **HTML5 fullscreen is band-scoped.** A YouTube/Jellyfin fullscreen request is
   honoured by adding the page's own fullscreen view inside the media band
   (`media_container`), above the page, with a black background; the page is

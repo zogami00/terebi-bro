@@ -61,6 +61,14 @@ class MediaWebPolicyTest {
     }
 
     @Test
+    fun `the qms surface is hidden outright only in media only`() {
+        assertTrue(MediaWebPolicy.hidesQmsSurface(MediaMode.MEDIA_ONLY))
+        assertFalse(MediaWebPolicy.hidesQmsSurface(MediaMode.QMS_ONLY))
+        assertFalse(MediaWebPolicy.hidesQmsSurface(MediaMode.SPLIT))
+        assertFalse(MediaWebPolicy.hidesQmsSurface(MediaMode.QMS_FOCUS))
+    }
+
+    @Test
     fun `immersive mode is not re-applied while the keyboard is up`() {
         assertTrue(MediaWebPolicy.shouldReapplyImmersive(fullscreenEnabled = true, imeVisible = false))
         assertFalse(MediaWebPolicy.shouldReapplyImmersive(fullscreenEnabled = true, imeVisible = true))

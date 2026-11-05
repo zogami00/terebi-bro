@@ -67,6 +67,14 @@ interface MediaWebHost {
      */
     fun setFocusable(focusable: Boolean)
 
+    /**
+     * Re-applies the page's `MATCH_PARENT` fill of the band container. Called
+     * on every mode change: a page created while the container was the Split
+     * band keeps the band's old height unless its `LayoutParams` are asserted
+     * again after the container has been resized.
+     */
+    fun applyBandLayout()
+
     /** Gives the page keyboard focus. A no-op before the first [show]. */
     fun requestFocus()
 
@@ -88,6 +96,7 @@ object NoopMediaWebHost : MediaWebHost {
     override fun hide() = Unit
     override fun destroy() = Unit
     override fun setFocusable(focusable: Boolean) = Unit
+    override fun applyBandLayout() = Unit
     override fun requestFocus() = Unit
     override fun pause() = Unit
     override fun resume() = Unit
@@ -148,6 +157,7 @@ class MediaWebSurface(
         hiddenForFullscreen = false
         val wasHidden = web.visibility != View.VISIBLE
         web.visibility = View.VISIBLE
+        applyBandLayout()
         applyFocusable(web)
         if (url.isNotEmpty() && url != currentUrl) {
             currentUrl = url
@@ -205,8 +215,24 @@ class MediaWebSurface(
         webView?.let { applyFocusable(it) }
     }
 
+    override fun applyBandLayout() {
+        val web = webView ?: return
+        val params = web.layoutParams as? FrameLayout.LayoutParams
+            ?: FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        // The object is usually the one already installed; mutating it in
+        // place does not request a layout, so it is assigned back below. The
+        // band is always full-bleed inside its container, in every mode.
+        params.width = FrameLayout.LayoutParams.MATCH_PARENT
+        params.height = FrameLayout.LayoutParams.MATCH_PARENT
+        params.topMargin = 0
+        web.layoutParams = params
+    }
+
     override fun requestFocus() {
-        webView?.requestFocus()
+        webView?.let { requestPageFocus(it) }
     }
 
     override fun pause() {
@@ -306,7 +332,22 @@ class MediaWebSurface(
         web.isFocusable = focusable
         web.isFocusableInTouchMode = focusable
         // Focusing the page in MEDIA_ONLY is what lets it own the IME.
-        if (focusable) web.requestFocus()
+        if (focusable) requestPageFocus(web)
+    }
+
+    /**
+     * Requests focus now and again after the next layout pass. A mode change
+     * re-applies the band's `LayoutParams` in the same frame, and a view whose
+     * bounds are still the previous mode's can drop the request; the posted
+     * re-assert is what leaves the page focused once the layout has settled.
+     */
+    private fun requestPageFocus(web: WebView) {
+        web.requestFocus()
+        web.post {
+            if (focusable && web.visibility == View.VISIBLE && !web.hasFocus()) {
+                web.requestFocus()
+            }
+        }
     }
 
     private inner class HardenedWebViewClient : WebViewClient() {
