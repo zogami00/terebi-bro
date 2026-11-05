@@ -42,7 +42,6 @@ object MediaSettingsRecovery {
         const val VOLUME_PERCENT = "mediaVolumePercent"
         const val FILL_MODE = "mediaFillMode"
         const val NEW_CALL_HIGHLIGHT = "mediaNewCallHighlight"
-        const val STRIP_POSITION = "mediaStripPosition"
         const val UI_SCALE = "mediaUiScale"
     }
 
@@ -126,8 +125,6 @@ object MediaSettingsRecovery {
             mediaFillMode = MediaFillMode.fromWire(string(raw, Keys.FILL_MODE, d.mediaFillMode.wire))
                 ?: d.mediaFillMode,
             newCallHighlight = bool(raw, Keys.NEW_CALL_HIGHLIGHT, d.newCallHighlight),
-            stripPosition = StripPosition.fromWire(string(raw, Keys.STRIP_POSITION, d.stripPosition.wire))
-                ?: d.stripPosition,
             uiScale = int(
                 raw, Keys.UI_SCALE, d.uiScale,
                 MediaSettingsValidator.MIN_UI_SCALE, MediaSettingsValidator.MAX_UI_SCALE

@@ -222,7 +222,6 @@ class ConfigStore(context: Context) {
         editor.putInt(KEY_MEDIA_VOLUME_PERCENT, settings.volumePercent)
         editor.putString(KEY_MEDIA_FILL_MODE, settings.mediaFillMode.wire)
         editor.putBoolean(KEY_MEDIA_NEW_CALL_HIGHLIGHT, settings.newCallHighlight)
-        editor.putString(KEY_MEDIA_STRIP_POSITION, settings.stripPosition.wire)
         editor.putInt(KEY_MEDIA_UI_SCALE, settings.uiScale)
         editor.commit()
     }
@@ -352,7 +351,6 @@ class ConfigStore(context: Context) {
         private const val KEY_MEDIA_VOLUME_PERCENT = MediaSettingsRecovery.Keys.VOLUME_PERCENT
         private const val KEY_MEDIA_FILL_MODE = MediaSettingsRecovery.Keys.FILL_MODE
         private const val KEY_MEDIA_NEW_CALL_HIGHLIGHT = MediaSettingsRecovery.Keys.NEW_CALL_HIGHLIGHT
-        private const val KEY_MEDIA_STRIP_POSITION = MediaSettingsRecovery.Keys.STRIP_POSITION
         private const val KEY_MEDIA_UI_SCALE = MediaSettingsRecovery.Keys.UI_SCALE
 
         const val DEFAULT_HOME_URL = "https://example.com"

@@ -11,9 +11,10 @@ package com.terebibro.tv
  * 3. info overlay open   -> close it
  * 4. error overlay open  -> close it
  * 5. HTML5 fullscreen    -> hide the video view
- * 6. WebView can go back -> navigate back
- * 7. not at the home page -> load home
- * 8. at the true root    -> open the setup / pairing page
+ * 6. MEDIA_ONLY          -> return to SPLIT (so Back never navigates the QMS page)
+ * 7. WebView can go back -> navigate back
+ * 8. not at the home page -> load home
+ * 9. at the true root    -> open the setup / pairing page
  *
  * There is no "exit" rung: Back always has something to do, so the ladder is
  * always handled. Exiting the app is deliberate and happens elsewhere (the Exit
@@ -31,7 +32,9 @@ object BackOrder {
         /** The on-device browser menu (long-press Back, or the remote's MENU/INFO key). */
         val menuVisible: Boolean = false,
         /** The read-only device-information overlay opened from the menu. */
-        val deviceInfoVisible: Boolean = false
+        val deviceInfoVisible: Boolean = false,
+        /** True while the display is in `MEDIA_ONLY`, where the WebView is hidden. */
+        val mediaOnly: Boolean = false
     )
 
     enum class Action {
@@ -42,6 +45,9 @@ object BackOrder {
         CLOSE_INFO,
         CLOSE_ERROR,
         HIDE_FULLSCREEN,
+
+        /** Leave `MEDIA_ONLY` for the automatic split layout. */
+        EXIT_MEDIA_MODE,
         GO_BACK,
         GO_HOME,
 
@@ -56,6 +62,7 @@ object BackOrder {
         state.infoOverlayVisible -> Action.CLOSE_INFO
         state.errorOverlayVisible -> Action.CLOSE_ERROR
         state.fullscreenVisible -> Action.HIDE_FULLSCREEN
+        state.mediaOnly -> Action.EXIT_MEDIA_MODE
         state.canGoBack -> Action.GO_BACK
         !state.atHome -> Action.GO_HOME
         else -> Action.SHOW_SETUP

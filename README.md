@@ -27,6 +27,23 @@ LAN opens the bundled controller page and drives the TV browser.
 - Optional **MQTT control** (off by default): the TV can be driven from any MQTT
   broker, and publishes **Home Assistant MQTT Discovery** so it appears as one
   device. See [MQTT control](#mqtt-control).
+- Optional **media mode** (**off by default**): a signage loop beside the queue
+  dashboard — local files and/or an HTTP playlist in a split layout, with the
+  QMS page restyled into a call strip. The menu, the controller and MQTT can all
+  switch between QMS only, media only and split. See
+  [Media mode](#media-mode).
+- **Idle split, call takeover.** While nothing is being called the screen shows
+  media plus the queue strip; a detected call (a DOM change, or optionally the
+  page's chime) takes the whole screen for a configurable dwell, then returns.
+- **Local media plus a playlist**, never both at once: files under
+  `/sdcard/Android/data/com.terebibro.tv/files/media/` (an `adb push` is
+  enough), or an HTTP JSON playlist with still-image durations.
+- **Upload from the controller**: authenticated, bounded and magic-byte checked;
+  no USB ritual and no storage permission.
+- **Signage language selector** for the patient-facing labels (Malay by
+  default; English, Chinese and Tamil included, machine-translated).
+- **MQTT/HA additions for media**: next/play/pause buttons, a mode sensor and a
+  now-serving sensor on the same discovered device.
 - mDNS advertisement as `<deviceName>.local`, with an IP fallback.
 - Automatic retry screen when the page is unavailable.
 - WebView renderer crash recovery.
@@ -197,6 +214,14 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 | MQTT base topic | `terebibro/<deviceName>` |
 | HA MQTT discovery | on |
 | HA discovery prefix | `homeassistant` |
+| Media mode | **off** |
+| Call dwell | 50 s |
+| Band split (media / header / queue) | 71 % / 7 % / 22 % |
+| Still-image duration | 10 s |
+| Playlist refresh | 300 s |
+| Call source | `dom` |
+| Media volume | 100 % |
+| Signage language | `ms` (Malay) |
 
 Changing the controller port persists the new value only after the bind is
 probed; an unavailable port is rejected with `409 port_unavailable` and the old
@@ -210,6 +235,185 @@ seconds apart) before giving up. A controller that changes the port is
 navigated to the new origin after the rebind, carrying its token in the URL
 fragment (which is never sent to the server, and is moved into `localStorage`
 and stripped on arrival).
+
+## Media mode
+
+**Media mode is off by default.** With it off the app is V1 exactly: one
+fullscreen WebView, the same Back ladder, the same overlays and the same MQTT
+commands. Enable it from the controller's Media card (or
+`POST /api/settings/media {"mediaModeEnabled": true}`) and the TV can show a signage
+loop beside the queue dashboard.
+
+The split layout is authored for a 1080p **dp** surface and the whole interface
+scales down proportionally on a shorter one (617 dp renders at 57 %), so a phone
+is not the intended display — a 1080p TV at density 1.0 shows it full size.
+
+### Four modes
+
+| Mode | What is on screen |
+| --- | --- |
+| `qms_only` | V1 exactly: the vendor page full screen. |
+| `media_only` | The media band only, full screen — a media workspace, not a display mode to sit in. It holds for 30 minutes and then returns to `split`. |
+| `split` | Media, header and queue strip (71 / 7 / 22 %). The automatic default once the dashboard has rendered. |
+| `qms_focus` | The vendor page full screen for the duration of a call. This is the reducer's transient mode; it cannot be selected manually. |
+
+`qms_only` may be held indefinitely (the queue stays visible), `media_only` for
+30 minutes, and `split` drops any hold. A call arriving during a manual hold
+still takes the screen and returns to the hold only if it has not expired. The
+mode is switched from the on-device menu, the controller, MQTT `set-mode`, or
+`POST /api/media/mode`.
+
+**Boot rule.** The QMS asks for a code and a button press once a day before it
+shows the dashboard, and a 238 px strip makes that form unusable. Media mode
+therefore does **not** engage until the strip selector has matched at least once
+since launch: a cold start stays `qms_only` full screen through the activation
+form, and reaches `split` only once the dashboard is actually rendering. A
+renderer crash or a WebView restart resets that history, because the reload
+lands on the activation page again.
+
+### The strip
+
+The queue band is a restyle of the vendor page's own nodes, not a copy of its
+text. `SEDANG DIPANGGIL` sits above the current call and `PANGGILAN TERDAHULU`
+above the history cards, as CSS `::before` content — so a vendor re-render
+cannot wipe them and they cannot contaminate the detection key. The labels are
+translated by the signage language selector; the vendor's own number, location
+and time are always shown verbatim. If the vendor markup changes and the
+selectors stop matching, the strip says `PAPAN GILIRAN TIDAK TERSEDIA` rather
+than showing a stale or invented number.
+
+The two bands are pinned to the viewport rather than distributed through the
+vendor's `main` column: the header is fixed at the top with the configured
+header-band height, the queue band is fixed from the header's bottom to the
+screen edge, and the card row fills it absolutely. The vendor's own padding and
+`gap` therefore cannot push the queue band below the screen edge on the
+reference Chromium 66 device, and the card type is derived from the band height
+so it shrinks with the setting.
+
+The call signal is the DOM change by default. `callSource` may be
+`dom_or_audio` to also treat the page's chime as a call, or `audio` to let only
+the chime take the screen (the DOM change still updates the number and location,
+but no longer starts a takeover). An audio signal re-arms the dwell and takes the
+screen exactly like a DOM call, but it **never invents a number** — with no DOM
+call observed the strip keeps showing what it last showed, or the no-call label. A chime is not a contract: it is
+best-effort on a WebView too old for document-start scripts, and a `<video>`
+used as a sound source is indistinguishable from programme audio.
+
+The QMS URL and the four detection selectors are set in the controller's Media
+card, under **Queue board**, and default to the reference dashboard's structure
+(see the settings table below). A blank QMS URL tracks the Home URL. Enabling
+media mode, or saving the settings, on a page that is already loaded reads that
+page immediately — a reload is not needed.
+
+### Where media lives
+
+Local files live in the app-private external folder:
+
+```text
+/sdcard/Android/data/com.terebibro.tv/files/media/
+```
+
+There is no runtime permission, no SAF picker and no USB ritual; `adb push` into
+that folder works, and the folder is **rescanned on resume**, so a push while
+the app is in the foreground appears without a restart. The currently playing
+item is kept when it still exists. A push that does not change the folder's
+modification time is invisible to a plain resume, so the Library card's **Reload
+media** button (or `POST /api/media/rescan`) forces a re-read while the app
+stays in front. The button reports the queue size it saw; an empty `local · 0
+items` line next to the band's "media unavailable" notice means the folder
+really is empty, not that the scan was stale.
+
+### Uploading from the controller
+
+`POST /api/media/upload` streams a file with `Content-Length` and the filename in
+the `X-Terebi-Filename` header (never a query parameter). Writes go to a
+`<hash>.part` file and are renamed atomically, so a partial upload is never
+visible to the queue. The caps are fixed constants, not settings:
+
+| Rule | Value |
+| --- | --- |
+| Per file | 256 MiB |
+| Files | 200 |
+| Total | 2 GiB |
+| Free-space reserve | 256 MiB, checked before the write |
+| Concurrency | 3 uploads |
+| Rate | 6/min per token |
+
+Magic bytes must match the extension (MP4 `ftyp`, JPEG SOI, PNG signature).
+**That is the gate** — a JPEG renamed `.mp4` is refused here. The
+`MediaMetadataRetriever` check is **advisory only** and never refuses the upload:
+the retriever cannot introspect every valid container on every device (the API 28
+emulator rejects a good H.264/AAC MP4), and refusing a valid file is worse than
+admitting one that later fails to play — a play failure is visible, recoverable
+and advances the queue, while a silent rejection looks like the feature is
+broken. The upload response carries `probe` (`readable`, `unreadable`, `error`);
+anything but `readable` shows a warning in the controller, not an error. A file
+that passes and still will not decode is reported as `mediaError` and skipped.
+
+### HTTP playlist
+
+A playlist is a JSON array. Ordering is the array order, `durationSec` applies to
+stills and must be 3–120, and URLs must be `http`/`https`:
+
+```json
+[
+  {"type": "image", "url": "https://example.com/promo.jpg", "durationSec": 10},
+  {"type": "video", "url": "https://example.com/clip.mp4", "durationSec": 30}
+]
+```
+
+The body is bounded to 256 KiB and 200 items, parsed strictly (top-level array,
+known keys only, no duplicate keys) and refreshed every
+`playlistRefreshSec` (default 300). A failed refresh keeps the last-good copy;
+a successfully fetched but empty or wholly invalid playlist is treated as "this
+playlist has nothing playable" and the local folder takes over. **Playlist or
+local folder, never both**: the playlist wins only when it is enabled and has at
+least one valid entry, and the two are never merged or interleaved. An ad-hoc
+URL (`POST /api/media/open`) replaces the queue until another source is chosen.
+
+### Settings and defaults
+
+Everything is editable at runtime and persisted; a `POST` is validated as a
+whole, so one bad value writes nothing.
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `mediaModeEnabled` | `false` | Master switch; off means V1. |
+| `qmsUrl` | Home URL | `http`/`https` only; a blank value tracks the Home URL. |
+| `qmsStripSelector` | `main > div:nth-child(1)` | The left column to restyle. |
+| `qmsNumberSelector` | `div:first-child > span` | Call number. |
+| `qmsLocationSelector` | `div:nth-child(2) > span:first-child` | Location/counter. |
+| `qmsTimeSelector` | `div:nth-child(2) > span:nth-child(2)` | Time. |
+| `callSource` | `dom` | `dom`, `dom_or_audio` or `audio`. |
+| `dwellSec` | `50` | 20–180. |
+| `mediaSplitPercent` / `headerBandPercent` / `stripHeightPercent` | `71` / `7` / `22` | Must sum to 100. |
+| `imageDurationSec` | `10` | 3–120; applies to stills. |
+| `mediaLocalEnabled` | `true` | The local folder as a source. |
+| `playlistEnabled` / `playlistUrl` / `playlistRefreshSec` | `false` / empty / `300` | Off until a URL is configured. |
+| `volumePercent` | `100` | 0–100; a waiting room will usually want 0. |
+| `uiLanguage` | `ms` | `ms`, `en`, `zh` or `ta` — patient-facing labels only. |
+| `mediaFillMode` | `letterboxBlur` | `letterboxBlur`, `letterbox` or `cover` (the only mode that crops). |
+
+A video is always letterboxed to its own aspect ratio inside the media band and
+centred; `mediaFillMode` applies to stills only, so a clip is never stretched to
+the band or cropped. The band's black background becomes the bars.
+
+All pixel values are authored against a **1080p baseline** and multiplied at
+runtime by `renderScale = screenHeightDp / 1080`, taken from the dp the device
+reports (not its physical pixels). Native band heights, card slots and label
+sizes use the same factor, and the injected strip stylesheet is built with it.
+A density-scaled 4K panel reports 1080 dp, so the factor is `1.0` and nothing
+changes; a device reporting native dp at 4K gets `2.0` and the same picture,
+larger. There is no second 4K design.
+
+**Limitations, stated plainly.** The media band plays **MP4 (H.264/AAC),
+JPEG and PNG** only. There is no HLS, no HEVC and no seeking; HEVC needs a
+hardware decoder the app cannot supply, and HLS would require a different player
+(`androidx.media3`). A chime played by a native app on the TV is invisible to the
+WebView. The strip depends on the vendor page's structure: if it changes, the
+strip degrades to "queue board unavailable" rather than guess. And nothing in
+this section has been verified on a device yet — see
+[Verification status](#verification-status).
 
 ## WebView version warning
 
@@ -437,10 +641,21 @@ a published payload.
 
 Actions: `open` (needs `url`), `set-home` (needs `url`), `home`, `back`,
 `forward`, `reload`, `stop`, `restart-webview`, `clear-cache`,
-`clear-site-data`. A URL is validated with the same `UrlValidator` the REST path
-uses, so `javascript:`/`data:` and the like are refused (the result reports
-`invalid_url`). An unknown action name is echoed back truncated to 32
-characters, so the result payload stays bounded.
+`clear-site-data`, `media-next`, `media-play`, `media-pause` and `set-mode`
+(needs `mode`: `qms_only`, `media_only` or `split`; `qms_focus` and unknown
+values are refused as `bad_request`). A URL is validated with the same
+`UrlValidator` the REST path uses, so `javascript:`/`data:` and the like are
+refused (the result reports `invalid_url`). An unknown action name is echoed back
+truncated to 32 characters, so the result payload stays bounded.
+
+`set-mode` calls the same `setMediaMode` as `POST /api/media/mode`;
+`media-next`, `media-play` and `media-pause` call the same `MediaController`
+methods as the on-device menu. With media mode disabled, the three playback
+actions are no-ops and report
+`{"id":<id>,"ok":true,"applied":false,"reason":"media_disabled"}` rather than
+failing, while `set-mode` refuses with the existing `media_disabled` conflict.
+Each action has a strict key set: a `url` on `media-next` or a `mode` on
+`media-play` is malformed, not ignored.
 
 Example:
 
@@ -487,9 +702,11 @@ device and a second TV does not get suffixed ids like `button.reload_2`) and the
 
 The `text` entities set `max: 255` (Home Assistant's own state limit) so a URL up
 to the 2048 characters our command parser accepts is not silently rejected by
-HA's default `max: 100`. The `Current URL` and `Title` sensors truncate their
-`value_template` to 255 characters for the same reason, and the `text`
-`command_template`s build their JSON with HA's `tojson` filter so a value
+HA's default `max: 100`. The `Current URL`, `Title` and `Now serving` sensors
+truncate their `value_template` with `truncate(250, true)` for the same reason:
+values up to 255 characters pass through whole and longer ones are cut to 250,
+so the result never exceeds Home Assistant's 255-character state limit. The
+`text` `command_template`s build their JSON with HA's `tojson` filter so a value
 containing a quote or backslash stays valid JSON instead of being dropped as
 malformed.
 
@@ -514,6 +731,9 @@ What appears:
 | Loading | `binary_sensor` | `value_json.loading` (`ON` / `OFF`) |
 | Connectivity | `binary_sensor` | the availability topic (`online` / `offline`) |
 | Reload, Restart WebView, Back, Home, Forward, Stop, Clear Cache, Clear Site Data | `button` | a `command` JSON payload |
+| Next, Play, Pause | `button` | `media-next` / `media-play` / `media-pause`; a no-op while media mode is off |
+| Mode | `sensor` | `{{ value_json.mediaMode }}` |
+| Now serving | `sensor` | `value_json.qmsNow` through `truncate(250, true)`: up to 255 characters pass unchanged, longer values are cut to 250 |
 | Home URL | `text` | mirrors `homeUrl`, writes `set-home` |
 | Open URL | `text` | writes `open` (no state) |
 
@@ -521,7 +741,7 @@ The sensor/availability entities report on `<base>/status` and
 `<base>/availability`; the buttons and text entities publish to `<base>/command`
 with the same action names the command parser accepts (`open`, `set-home`,
 `home`, `back`, `forward`, `reload`, `stop`, `restart-webview`, `clear-cache`,
-`clear-site-data`).
+`clear-site-data`, `media-next`, `media-play`, `media-pause`).
 
 **Removing it.** Turn discovery **off** in the MQTT panel (or
 `POST /api/settings/mqtt {"discoveryEnabled": false}`). The app then publishes an
@@ -622,6 +842,16 @@ What it does protect against:
   drained closes the connection, so leftover body bytes cannot be re-parsed as a
   new request. Chunked bodies and GETs that carry a body are always refused.
 
+The media surface adds a new, bounded write surface to that model. The QMS
+bridge is still **write-only and content-free**: the injected
+script is gated to the configured QMS origin, exposes one method, five fixed
+signal kinds, a sanitised value of at most 64 characters and a `void` return, so
+a hostile page can at worst force a nuisance full-screen flip. Library uploads
+go through the same authenticated, CSRF- and Host-checked control server, are
+bounded by quota, reserve, concurrency and rate, and validate magic bytes before
+they reach the queue. Media is stored in app-private external storage rather
+than `filesDir`, so a full disk breaks playback, not pairing or token writes.
+
 What it does **not** protect against:
 
 - Other devices on the same trusted LAN that already hold a token.
@@ -645,8 +875,9 @@ bodies and WebSocket `auth` messages are never logged.
 
 - `docs/implementation-plan.md` — the original implementation plan (verbatim).
 - `docs/v1-scope.md` — what V1 ships and what was deliberately deferred.
-- `docs/v2-scope.md` — what V2 (QMS + media) adds, the trade-off behind each
-  decision, and what it leaves out.
+- `docs/v2-scope.md` — what V2 (QMS + media) adds: media mode, the split
+  layout, QMS detection, the media library and playlist, the chime, the
+  trade-off behind each decision, and the verification caveats.
 
 ## Verification status
 
@@ -722,3 +953,34 @@ suite**, so this is a maintainer-run end-to-end pass on **one API 28 unit**, not
 exhaustive coverage. The **API 30+ immersive path has been exercised only on an
 emulator (Android 14 / API 34), never on physical hardware**, so Android 11+
 real-hardware behaviour remains unverified.
+
+### V2 media mode
+
+V2 is validated **at the JVM and build level only**:
+
+- `testDebugUnitTest` passes: **554 JVM tests, 0 failures, 1 skipped** (a symlink
+  test skipped on Windows). This includes the media reducer and layout, the
+  settings validator, the QMS call key, signal clamp and injected-script
+  escaping, the media queue and playlist parser, the upload rules, the media
+  state JSON, the strict MQTT parser with the four new actions and their key
+  sets, the discovery builder with the three new buttons and two new sensors
+  (each button payload re-parsed through the real command parser), the
+  `command/result` shape (an existing action still reports exactly
+  `{"id":…,"ok":true}`, and a disabled media action adds only
+  `applied`/`reason`), and the chime rule (source gating, the 1 s DOM-call
+  debounce, and the `audio` source suppressing the DOM takeover while still
+  updating the strip text).
+- `lintDebug` runs with **0 errors**; its 34 warnings are pre-existing
+  (`setText` literals and dependency-version notices in `MainActivity`, plus
+  manifest and resource warnings), and there are no new warnings in the media or
+  MQTT code.
+- `assembleDebug` builds and produces `app-debug.apk`.
+
+**Nothing has been verified on a device.** The injected QMS script has never run
+against the real vendor page, so selector matching, the `SEDANG DIPANGGIL` /
+`PANGGILAN TERDAHULU` strip, the boot rule through the daily activation form and
+the chime hook are all unexercised. No upload, playlist fetch, local playback or
+remote playback has been exercised at runtime. The media decoder's behaviour
+alongside the live WebView, 720p geometry, the 24 h soak and every item on the
+device checklist in `docs/v2-scope.md` remain open. Treat V2 as **unverified at
+runtime** until that pass is recorded.

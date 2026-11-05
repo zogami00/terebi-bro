@@ -167,13 +167,15 @@ class BackOrderTest {
             state(canGoBack = true),
             state(atHome = false),
             state().copy(menuVisible = true),
-            state().copy(deviceInfoVisible = true)
+            state().copy(deviceInfoVisible = true),
+            state().copy(mediaOnly = true)
         ).map { BackOrder.decision(it) }
         assertEquals(
             setOf(
                 Action.CLOSE_INFO,
                 Action.CLOSE_ERROR,
                 Action.HIDE_FULLSCREEN,
+                Action.EXIT_MEDIA_MODE,
                 Action.GO_BACK,
                 Action.GO_HOME,
                 Action.SHOW_SETUP,
@@ -182,5 +184,44 @@ class BackOrderTest {
             ),
             actions.toSet()
         )
+    }
+
+    // ---------------------------------------------------------------------
+    // MEDIA_ONLY rung
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `media only returns to split before the webview ladder`() {
+        assertEquals(
+            Action.EXIT_MEDIA_MODE,
+            BackOrder.decision(state(canGoBack = true, atHome = false).copy(mediaOnly = true))
+        )
+    }
+
+    @Test
+    fun `an open menu is closed before leaving media only`() {
+        assertEquals(
+            Action.CLOSE_MENU,
+            BackOrder.decision(state().copy(mediaOnly = true, menuVisible = true))
+        )
+    }
+
+    @Test
+    fun `fullscreen and overlays still outrank the media-only rung`() {
+        assertEquals(
+            Action.HIDE_FULLSCREEN,
+            BackOrder.decision(state(fullscreen = true).copy(mediaOnly = true))
+        )
+        assertEquals(
+            Action.CLOSE_INFO,
+            BackOrder.decision(state(info = true).copy(mediaOnly = true))
+        )
+    }
+
+    @Test
+    fun `mediaOnly false leaves every existing rung unchanged`() {
+        assertEquals(Action.GO_BACK, BackOrder.decision(state(canGoBack = true)))
+        assertEquals(Action.GO_HOME, BackOrder.decision(state(atHome = false)))
+        assertEquals(Action.SHOW_SETUP, BackOrder.decision(state(atHome = true)))
     }
 }

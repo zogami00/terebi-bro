@@ -123,7 +123,8 @@ class MqttStatusPayloadTest {
             "mediaEnabled", "mediaMode", "mediaSource", "mediaItem", "mediaIndex",
             "mediaCount", "mediaPaused", "mediaError", "qmsNow", "qmsLocation",
             "qmsDetectionHealthy", "qmsLastCallAtMs", "documentStartSupported",
-            "mediaLocalFiles", "mediaLocalBytes", "mediaFreeBytes", "uiLanguage",
+            "mediaLocalFiles", "mediaLocalBytes", "mediaFreeBytes",
+            "playlistLastError", "playlistLastFetchMs", "uiLanguage",
             "screenWidthDp", "screenHeightDp", "densityDpi", "renderScale",
             "discoveryTopics", "discoveryError", "statusError"
         )

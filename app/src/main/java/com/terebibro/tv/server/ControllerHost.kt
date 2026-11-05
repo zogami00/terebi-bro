@@ -65,6 +65,26 @@ interface ControllerHost {
     /** Called after the persisted media settings change, so the mode is re-derived. */
     fun onMediaSettingsChanged()
 
+    /** Plays an ad-hoc URL on the media band; `invalid_url` for a non-http(s) value. */
+    fun openMediaUrl(url: String): ApiResult
+
+    /**
+     * Queue/playback control used by the MQTT actions. Each is a no-op with a
+     * clear result when media mode is off.
+     */
+    fun mediaNext(): ApiResult
+
+    fun mediaPlay(): ApiResult
+
+    fun mediaPause(): ApiResult
+
+    /**
+     * Called after a library upload or delete succeeded, so the media layer
+     * re-reads the folder. Playback keeps the current item when it still
+     * exists; an unrelated change never restarts it.
+     */
+    fun onMediaLibraryChanged()
+
     /** The dp metrics the layout is authored against. */
     fun screenMetrics(): ScreenMetrics
 }

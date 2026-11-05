@@ -52,7 +52,6 @@ class MediaSettingsValidatorTest {
         volumePercent = 70,
         mediaFillMode = MediaFillMode.COVER,
         newCallHighlight = false,
-        stripPosition = StripPosition.RIGHT,
         uiScale = 120
     )
 
@@ -89,7 +88,6 @@ class MediaSettingsValidatorTest {
         assertEquals(current.volumePercent, settings.volumePercent)
         assertEquals(current.mediaFillMode, settings.mediaFillMode)
         assertEquals(current.newCallHighlight, settings.newCallHighlight)
-        assertEquals(current.stripPosition, settings.stripPosition)
         assertEquals(current.uiScale, settings.uiScale)
     }
 
@@ -326,6 +324,36 @@ class MediaSettingsValidatorTest {
         assertEquals("qmsLocationSelector", invalid(MediaUpdate(qmsLocationSelector = "span{")).field)
     }
 
+    @Test
+    fun `a selector cannot break the stylesheet scope`() {
+        // A comma ends the `html[data-terebi-strip] …` scope.
+        val comma = invalid(MediaUpdate(qmsStripSelector = "main > div, body"))
+        assertEquals("qmsStripSelector", comma.field)
+        assertTrue(comma.message.contains("qmsStripSelector"))
+        assertTrue(comma.message.contains("single, comment-free selector"))
+
+        // These shapes are checked on every selector-bearing field.
+        assertEquals("qmsNumberSelector", invalid(MediaUpdate(qmsNumberSelector = "span/*")).field)
+        assertEquals("qmsLocationSelector", invalid(MediaUpdate(qmsLocationSelector = "span*/")).field)
+        assertEquals("qmsTimeSelector", invalid(MediaUpdate(qmsTimeSelector = "span[title=\"x]")).field)
+
+        // An even number of quotes is a well-formed attribute selector.
+        valid(MediaUpdate(qmsStripSelector = "main > div[data-x=\"y\"]"))
+    }
+
+    @Test
+    fun `the documented default selectors are accepted`() {
+        val defaults = MediaSettings()
+        valid(
+            MediaUpdate(
+                qmsStripSelector = defaults.qmsStripSelector,
+                qmsNumberSelector = defaults.qmsNumberSelector,
+                qmsLocationSelector = defaults.qmsLocationSelector,
+                qmsTimeSelector = defaults.qmsTimeSelector
+            )
+        )
+    }
+
     // ------------------------------------------------------------------- enums
 
     @Test
@@ -344,11 +372,6 @@ class MediaSettingsValidatorTest {
     }
 
     @Test
-    fun `an unknown strip position is rejected on its own field`() {
-        assertEquals("stripPosition", invalid(MediaUpdate(stripPosition = "left")).field)
-    }
-
-    @Test
     fun `every documented enum wire value round-trips`() {
         assertEquals(CallSource.DOM_OR_AUDIO, valid(MediaUpdate(callSource = "dom_or_audio")).callSource)
         assertEquals(CallSource.AUDIO, valid(MediaUpdate(callSource = "audio")).callSource)
@@ -357,7 +380,6 @@ class MediaSettingsValidatorTest {
         assertEquals(UiLanguage.TA, valid(MediaUpdate(uiLanguage = "ta")).uiLanguage)
         assertEquals(MediaFillMode.LETTERBOX, valid(MediaUpdate(mediaFillMode = "letterbox")).mediaFillMode)
         assertEquals(MediaFillMode.COVER, valid(MediaUpdate(mediaFillMode = "cover")).mediaFillMode)
-        assertEquals(StripPosition.RIGHT, valid(MediaUpdate(stripPosition = "right")).stripPosition)
     }
 
     // ------------------------------------------------------------------ merging

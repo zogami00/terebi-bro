@@ -46,4 +46,21 @@ class RateLimiterTest {
         assertTrue(limiter.allow("a"))
         assertFalse(limiter.allow("a"))
     }
+
+    @Test
+    fun `the upload bucket allows six per minute`() {
+        var now = 0L
+        val limiter = RateLimiter(
+            ratePerSecond = AuthManager.UPLOAD_RATE_PER_SECOND,
+            burst = AuthManager.UPLOAD_BURST,
+            now = { now }
+        )
+        repeat(6) { assertTrue("upload $it should be allowed", limiter.allow("token")) }
+        assertFalse("the seventh upload in the burst is refused", limiter.allow("token"))
+
+        // One token is one tenth of a minute.
+        now += 10_000
+        assertTrue(limiter.allow("token"))
+        assertFalse(limiter.allow("token"))
+    }
 }

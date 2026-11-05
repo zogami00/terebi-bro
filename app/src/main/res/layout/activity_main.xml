@@ -10,6 +10,52 @@
         android:layout_height="match_parent" />
 
     <!--
+      Media band. Declared after the WebView and before every overlay so it
+      covers the WebView in split mode while leaving all overlays on top.
+      clickable + focusable because in MEDIA_ONLY the WebView is hidden and
+      something must be able to hold focus.
+    -->
+    <FrameLayout
+        android:id="@+id/media_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <SurfaceView
+            android:id="@+id/media_surface"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ImageView
+            android:id="@+id/media_backdrop"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:alpha="0.35"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/media_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/media_placeholder"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:textSize="24sp"
+            android:textColor="#FFFFFF"
+            android:text="@string/media_placeholder" />
+
+    </FrameLayout>
+
+    <!--
       First-run / pairing overlay. TV remote navigable.
 
       ScrollView so a short display (e.g. a 720p TV at ~540dp tall) can never
@@ -257,6 +303,38 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:text="@string/menu_enter_url" />
+
+            <Button
+                android:id="@+id/menu_media_play_pause"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_play_pause" />
+
+            <Button
+                android:id="@+id/menu_media_next"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_next" />
+
+            <Button
+                android:id="@+id/menu_media_url"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_url" />
+
+            <Button
+                android:id="@+id/menu_media_mode"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_mode" />
 
             <Button
                 android:id="@+id/menu_settings"

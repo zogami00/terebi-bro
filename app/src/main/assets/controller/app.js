@@ -193,6 +193,7 @@
       refreshNetworks();
       refreshMqtt();
       refreshMedia();
+      refreshLibrary();
     } else if (message.type === 'state') {
       updateState(message.state);
     } else if (message.type === 'event') {
@@ -281,6 +282,7 @@
     var keepAwake = $('keepAwakeToggle');
     if (keepAwake && document.activeElement !== keepAwake) keepAwake.checked = !!state.keepAwake;
     if (state.mediaMode) setMediaModeLine(state.mediaMode);
+    if (state.mediaSource !== undefined) setMediaSourceLine(state);
   }
 
   function refreshDevice() {
@@ -534,7 +536,15 @@
     imageDurationSec: 'mediaImageDurationInput',
     mediaFillMode: 'mediaFillModeInput',
     uiLanguage: 'mediaLanguageInput',
-    uiScale: 'mediaUiScaleInput'
+    uiScale: 'mediaUiScaleInput',
+    qmsUrl: 'mediaQmsUrlInput',
+    qmsStripSelector: 'mediaStripSelectorInput',
+    qmsNumberSelector: 'mediaNumberSelectorInput',
+    qmsLocationSelector: 'mediaLocationSelectorInput',
+    qmsTimeSelector: 'mediaTimeSelectorInput',
+    callSource: 'mediaCallSourceInput',
+    playlistUrl: 'playlistUrlInput',
+    playlistRefreshSec: 'playlistRefreshInput'
   };
 
   function clearMediaFieldErrors() {
@@ -577,8 +587,38 @@
       setSelectIfIdle('mediaFillModeInput', d.mediaFillMode);
       setSelectIfIdle('mediaLanguageInput', d.uiLanguage);
       setValueIfIdle('mediaUiScaleInput', d.uiScale);
+      setValueIfIdle('mediaQmsUrlInput', d.qmsUrl);
+      setValueIfIdle('mediaStripSelectorInput', d.qmsStripSelector);
+      setValueIfIdle('mediaNumberSelectorInput', d.qmsNumberSelector);
+      setValueIfIdle('mediaLocationSelectorInput', d.qmsLocationSelector);
+      setValueIfIdle('mediaTimeSelectorInput', d.qmsTimeSelector);
+      setSelectIfIdle('mediaCallSourceInput', d.callSource);
+      setCheckIfIdle('playlistEnabledToggle', d.playlistEnabled);
+      setValueIfIdle('playlistUrlInput', d.playlistUrl);
+      setValueIfIdle('playlistRefreshInput', d.playlistRefreshSec);
       setMediaModeLine(runtime.mode);
+      setMediaSourceLine(runtime);
     });
+  }
+
+  /* Read-only source diagnostics, fed by both the state broadcast and the
+     settings runtime object. A server-provided string only ever reaches the
+     DOM through textContent. */
+  function setMediaSourceLine(source) {
+    var el = $('mediaSourceState');
+    if (!el || !source) return;
+    var name = source.mediaSource ? source.mediaSource : 'none';
+    var count = Number(source.mediaCount) || 0;
+    var fetchedMs = Number(source.playlistLastFetchMs) || 0;
+    var error = source.playlistLastError;
+    // The count is what makes an empty queue obvious without opening the
+    // library: "local · 0 items" beside the "media unavailable" band.
+    var parts = [name + ' \u00b7 ' + count + (count === 1 ? ' item' : ' items')];
+    parts.push(fetchedMs > 0
+      ? 'last playlist fetch: ' + Math.round(fetchedMs) + ' ms'
+      : 'playlist not fetched yet');
+    if (error) parts.push('playlist error: ' + error);
+    el.textContent = parts.join(' \u2014 ');
   }
 
   /* A number input is either a valid integer or omitted from the payload. An
@@ -612,6 +652,22 @@
     putNumber(body, 'uiScale', 'mediaUiScaleInput');
     putString(body, 'mediaFillMode', 'mediaFillModeInput');
     putString(body, 'uiLanguage', 'mediaLanguageInput');
+    // Selectors are omitted when blank: the server keeps the previous value,
+    // and a blank selector is a named 400 rather than a silent reset.
+    putString(body, 'qmsStripSelector', 'mediaStripSelectorInput');
+    putString(body, 'qmsNumberSelector', 'mediaNumberSelectorInput');
+    putString(body, 'qmsLocationSelector', 'mediaLocationSelectorInput');
+    putString(body, 'qmsTimeSelector', 'mediaTimeSelectorInput');
+    putString(body, 'callSource', 'mediaCallSourceInput');
+    // The QMS URL is always sent, even empty: that is the documented way to
+    // clear a stale URL back to "track the Home URL", exactly like playlistUrl.
+    body.qmsUrl = $('mediaQmsUrlInput').value.trim();
+    // The playlist URL is always sent, not omitted when empty: that is the
+    // documented way to clear a stale URL, and enabling the playlist without
+    // one is a named 400 rather than a silent no-op.
+    body.playlistEnabled = $('playlistEnabledToggle').checked;
+    body.playlistUrl = $('playlistUrlInput').value.trim();
+    putNumber(body, 'playlistRefreshSec', 'playlistRefreshInput');
     api('POST', '/api/settings/media', body).then(function (result) {
       if (result.status === 200 && result.json) {
         clearMediaFieldErrors();
@@ -630,6 +686,244 @@
         banner(apiError(result));
       }
     });
+  }
+
+  /* ------------------------------------------------------------------ library */
+
+  var libraryFiles = [];
+  var previewUrl = null;
+  var previewName = '';
+
+  function formatBytes(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    var units = ['KB', 'MB', 'GB'];
+    var i = -1;
+    do { n = n / 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return (n < 10 ? n.toFixed(1) : String(Math.round(n))) + ' ' + units[i];
+  }
+
+  function setUploadError(message) {
+    var el = $('libraryError');
+    if (el) el.textContent = message || '';
+  }
+
+  /* A warning only: the magic-byte gate accepted the file, but this device's
+     metadata retriever could not read it. The upload is kept. */
+  function setUploadWarning(message) {
+    var el = $('libraryWarning');
+    if (el) el.textContent = message || '';
+  }
+
+  function setUploadProgress(text) {
+    var el = $('uploadProgress');
+    if (el) el.textContent = text || '';
+  }
+
+  /* The preview is a Blob object URL; it is revoked as soon as it is replaced
+     so a phone does not pin the decoded file in memory. */
+  function clearPreview() {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+    previewName = '';
+    var box = $('libraryPreview');
+    if (box) { while (box.firstChild) box.removeChild(box.firstChild); }
+  }
+
+  /* Server-derived values only ever reach the DOM through textContent. */
+  function renderLibrary(files) {
+    libraryFiles = (files || []).slice();
+    var summary = $('librarySummary');
+    if (summary) {
+      summary.textContent = libraryFiles.length === 0
+        ? 'No media yet.'
+        : libraryFiles.length + ' file' + (libraryFiles.length === 1 ? '' : 's') + ' in the library.';
+    }
+    var ul = $('libraryList');
+    if (!ul) return;
+    while (ul.firstChild) ul.removeChild(ul.firstChild);
+    libraryFiles.forEach(function (file) {
+      var li = document.createElement('li');
+      var info = document.createElement('span');
+      info.className = 'grow';
+      info.textContent = file.name + ' \u2014 ' + formatBytes(file.bytes) + ' (' + file.kind + ')';
+      var preview = document.createElement('button');
+      preview.textContent = 'Preview';
+      preview.addEventListener('click', function () { previewFile(file); });
+      var del = document.createElement('button');
+      del.className = 'danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', function () { deleteLibraryFile(file.name); });
+      li.appendChild(info);
+      li.appendChild(preview);
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  function refreshLibrary() {
+    api('GET', '/api/media/files', undefined).then(function (result) {
+      if (result.status === 200 && result.json && result.json.files) {
+        renderLibrary(result.json.files);
+      }
+    });
+  }
+
+  /* Forces the TV to re-read the media folder. An `adb push` while the app is
+     in the foreground is otherwise invisible until the next resume, so this is
+     the operator's way to make it appear without backgrounding the app. */
+  function rescanLibrary() {
+    setUploadError('');
+    setUploadProgress('Reloading media\u2026');
+    api('POST', '/api/media/rescan', {}).then(function (result) {
+      if (result.status === 200 && result.json) {
+        var count = Number(result.json.count) || 0;
+        setUploadProgress('Media reloaded \u2014 ' + count + (count === 1 ? ' item.' : ' items.'));
+        refreshLibrary();
+        refreshMedia();
+      } else {
+        setUploadProgress('');
+        setUploadError(apiError(result));
+      }
+    });
+  }
+
+  function deleteLibraryFile(name) {
+    setUploadError('');
+    api('POST', '/api/media/delete', { name: name }).then(function (result) {
+      if (result.status === 200 && result.json && result.json.files) {
+        if (previewName === name) clearPreview();
+        renderLibrary(result.json.files);
+      } else {
+        setUploadError(apiError(result));
+      }
+    });
+  }
+
+  function previewFile(file) {
+    setUploadError('');
+    // Bearer token in a header, never in a URL: the preview is a fetch, not a
+    // navigation, and no credential or filename reaches the address bar.
+    fetch('/api/media/file', {
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + token,
+        'X-Terebi-CSRF': '1',
+        // The server resolves the file from this header only; without it the
+        // preview is a 404. The name never travels in the URL.
+        'X-Terebi-Filename': encodeURIComponent(file.name)
+      },
+      cache: 'no-store'
+    }).then(function (response) {
+      if (!response.ok) throw new Error('Preview failed (' + response.status + ')');
+      return response.blob();
+    }).then(function (blob) {
+      clearPreview();
+      previewUrl = URL.createObjectURL(blob);
+      previewName = file.name;
+      var box = $('libraryPreview');
+      var media;
+      if (file.kind === 'video') {
+        media = document.createElement('video');
+        media.controls = true;
+      } else {
+        media = document.createElement('img');
+        media.alt = file.name;
+      }
+      media.src = previewUrl;
+      media.style.maxWidth = '100%';
+      media.style.maxHeight = '240px';
+      media.style.marginTop = '12px';
+      media.style.borderRadius = '8px';
+      box.appendChild(media);
+    }).catch(function (error) {
+      setUploadError(error && error.message ? error.message : 'Preview failed');
+    });
+  }
+
+  /* One request per file, sequential, so the server's single-upload rule is
+     never tripped by our own concurrency. The filename travels in the
+     percent-encoded header, never in the URL. */
+  function uploadFiles() {
+    var input = $('libraryFileInput');
+    var files = input && input.files ? input.files : null;
+    setUploadError('');
+    setUploadWarning('');
+    if (!files || files.length === 0) {
+      setUploadError('Choose at least one file to upload.');
+      return;
+    }
+    var list = [];
+    for (var i = 0; i < files.length; i++) list.push(files[i]);
+    var index = 0;
+    var firstError = '';
+    var firstWarning = '';
+
+    function next() {
+      if (index >= list.length) {
+        setUploadProgress('Upload finished.');
+        input.value = '';
+        refreshLibrary();
+        return;
+      }
+      uploadOne(list[index++], function (message) {
+        if (message && !firstError) firstError = message;
+        if (firstError) setUploadError(firstError);
+        next();
+      });
+    }
+
+    function uploadOne(file, done) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/media/upload');
+      xhr.setRequestHeader(CSRF_HEADER, '1');
+      if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+      xhr.setRequestHeader('X-Terebi-Filename', encodeURIComponent(file.name));
+      // A stalled connection must not hold the server's single upload slot for
+      // ever; the server also releases it on every failure path.
+      xhr.timeout = 120000;
+      xhr.upload.onprogress = function (event) {
+        if (event.lengthComputable && event.total > 0) {
+          var pct = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress('Uploading ' + file.name + ' \u2014 ' + pct + '%');
+        } else {
+          setUploadProgress('Uploading ' + file.name + '\u2026');
+        }
+      };
+      xhr.onload = function () {
+        var json = null;
+        try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; }
+        if (xhr.status === 200 && json && json.ok) {
+          setUploadProgress('Uploaded ' + file.name + '.');
+          // The server accepted the file on its magic bytes; a probe that is
+          // not `readable` is a warning, never a rejection.
+          if (json.probe && json.probe !== 'readable') {
+            if (!firstWarning) {
+              firstWarning = file.name + ': uploaded, but this device could not ' +
+                'read its metadata \u2014 if it does not play, check the codec.';
+            }
+            setUploadWarning(firstWarning);
+          }
+          done('');
+        } else {
+          var message = json && json.error
+            ? (json.error.message || json.error.code)
+            : 'Upload failed (' + xhr.status + ')';
+          done(file.name + ': ' + message);
+        }
+      };
+      xhr.onerror = function () {
+        done(file.name + ': upload failed');
+      };
+      xhr.ontimeout = function () {
+        done(file.name + ': upload timed out');
+      };
+      xhr.send(file);
+    }
+
+    next();
   }
 
   /* ------------------------------------------------------------------ actions */
@@ -721,9 +1015,13 @@
 
     $('saveMedia').addEventListener('click', saveMedia);
     $('mediaEnabledToggle').addEventListener('change', saveMedia);
+    $('playlistEnabledToggle').addEventListener('change', saveMedia);
     $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });
+
+    $('uploadButton').addEventListener('click', uploadFiles);
+    $('libraryReloadButton').addEventListener('click', rescanLibrary);
 
     $('unpairButton').addEventListener('click', unpair);
   }
@@ -738,6 +1036,7 @@
     refreshNetworks();
     refreshMqtt();
     refreshMedia();
+    refreshLibrary();
     api('GET', '/api/state', undefined).then(function (result) {
       if (result.status === 200 && result.json && result.json.state) updateState(result.json.state);
     });

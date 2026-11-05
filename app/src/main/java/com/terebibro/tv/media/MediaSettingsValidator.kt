@@ -76,11 +76,6 @@ object MediaSettingsValidator {
                 )
         } ?: current.mediaFillMode
 
-        val stripPosition = update.stripPosition?.let { wire ->
-            StripPosition.fromWire(wire.trim())
-                ?: return Result.Invalid("stripPosition", "stripPosition must be bottom or right")
-        } ?: current.stripPosition
-
         selector(stripSelector, "qmsStripSelector")?.let { return it }
         selector(numberSelector, "qmsNumberSelector")?.let { return it }
         selector(locationSelector, "qmsLocationSelector")?.let { return it }
@@ -179,7 +174,6 @@ object MediaSettingsValidator {
                 volumePercent = volumePercent,
                 mediaFillMode = mediaFillMode,
                 newCallHighlight = update.newCallHighlight ?: current.newCallHighlight,
-                stripPosition = stripPosition,
                 uiScale = uiScale
             )
         )
@@ -205,6 +199,9 @@ object MediaSettingsValidator {
         }
         if (value.contains('{') || value.contains('}')) {
             return Result.Invalid(field, "$field must not contain '{' or '}'")
+        }
+        if (QmsStripCss.selectorBreaksScope(value)) {
+            return Result.Invalid(field, "$field must be a single, comment-free selector")
         }
         return null
     }

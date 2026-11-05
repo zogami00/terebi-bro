@@ -26,7 +26,15 @@ data class MediaState(
     val enabled: Boolean = false,
     val returnMode: MediaMode = MediaMode.SPLIT,
     val qmsAvailable: Boolean = true,
-    val dwellUntilMs: Long = 0L
+    val dwellUntilMs: Long = 0L,
+    /**
+     * Whether the strip selector has matched at least once since launch. It is
+     * never persisted: a restart must not inherit a match from before the
+     * reboot, and the daily activation form must keep the whole screen.
+     */
+    val qmsMatched: Boolean = false,
+    /** Selector-level health, separate from page-level [qmsAvailable]. */
+    val qmsDetectionHealthy: Boolean = false
 ) {
     /** Playback must be paused while either pause source is active. */
     val paused: Boolean get() = overlayVisible || lifecyclePaused

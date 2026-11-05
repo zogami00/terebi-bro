@@ -26,10 +26,136 @@ class MediaStateMachineTest {
     }
 
     @Test
-    fun `enabling from qms only starts in split`() {
+    fun `enabling from qms only waits for the first selector match`() {
+        // Boot rule: media mode must not engage before the dashboard has
+        // rendered, because the page may be the daily activation form.
         val state = reduce(MediaState(), MediaEvent.Enabled(true))
         assertTrue(state.enabled)
+        assertEquals(MediaMode.QMS_ONLY, state.mode)
+
+        val matched = reduce(state, MediaEvent.QmsProbe(true))
+        assertEquals(MediaMode.SPLIT, matched.mode)
+        assertTrue(matched.qmsMatched)
+        assertTrue(matched.qmsDetectionHealthy)
+    }
+
+    @Test
+    fun `enabling after a match starts in split`() {
+        val state = MediaState(qmsMatched = true)
+        val enabled = reduce(state, MediaEvent.Enabled(true))
+        assertTrue(enabled.enabled)
+        assertEquals(MediaMode.SPLIT, enabled.mode)
+    }
+
+    @Test
+    fun `a page that never matched stays in qms only`() {
+        var state = reduce(MediaState(), MediaEvent.Enabled(true))
+        state = reduce(state, MediaEvent.QmsProbe(false))
+        assertEquals(MediaMode.QMS_ONLY, state.mode)
+        assertFalse(state.qmsMatched)
+        assertFalse(state.qmsDetectionHealthy)
+    }
+
+    @Test
+    fun `a lost match after one match keeps split and reports unhealthy`() {
+        var state = reduce(MediaState(), MediaEvent.Enabled(true))
+        state = reduce(state, MediaEvent.QmsProbe(true))
         assertEquals(MediaMode.SPLIT, state.mode)
+
+        state = reduce(state, MediaEvent.QmsProbe(false))
+        assertEquals(MediaMode.SPLIT, state.mode)
+        assertTrue(state.qmsMatched)
+        assertFalse(state.qmsDetectionHealthy)
+        assertTrue(state.qmsAvailable)
+    }
+
+    @Test
+    fun `a page-level failure degrades split to media only`() {
+        var state = reduce(split(), MediaEvent.QmsProbe(true))
+        state = reduce(state, MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, state.mode)
+        assertFalse(state.qmsAvailable)
+        assertFalse(state.qmsDetectionHealthy)
+    }
+
+    @Test
+    fun `a page-level failure at launch degrades qms only to media only`() {
+        val state = reduce(MediaState(), MediaEvent.Enabled(true))
+        assertEquals(MediaMode.QMS_ONLY, state.mode)
+        assertEquals(MediaMode.MEDIA_ONLY, reduce(state, MediaEvent.QmsPageFailed).mode)
+    }
+
+    @Test
+    fun `a recovered probe restores split from a degraded media only`() {
+        var state = reduce(split(), MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, state.mode)
+
+        state = reduce(state, MediaEvent.QmsProbe(true))
+        assertEquals(MediaMode.SPLIT, state.mode)
+        assertTrue(state.qmsAvailable)
+    }
+
+    @Test
+    fun `a probe cannot override a manual qms only hold`() {
+        var state = reduce(split(), MediaEvent.Manual(MediaMode.QMS_ONLY))
+        state = reduce(state, MediaEvent.QmsProbe(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_ONLY, state.mode)
+        assertEquals(MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS, state.manualUntilMs)
+        assertTrue(state.qmsMatched)
+    }
+
+    @Test
+    fun `a page load before any match returns to full-screen qms only`() {
+        var state = reduce(MediaState(), MediaEvent.Enabled(true))
+        state = reduce(state, MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, state.mode)
+
+        val recovered = reduce(state, MediaEvent.QmsPageLoaded)
+        assertEquals(MediaMode.QMS_ONLY, recovered.mode)
+        assertTrue(recovered.qmsAvailable)
+    }
+
+    @Test
+    fun `a page load after a match restores split from a degraded media only`() {
+        var state = reduce(split(), MediaEvent.QmsProbe(true))
+        state = reduce(state, MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, state.mode)
+
+        val recovered = reduce(state, MediaEvent.QmsPageLoaded)
+        assertEquals(MediaMode.SPLIT, recovered.mode)
+        assertTrue(recovered.qmsAvailable)
+    }
+
+    @Test
+    fun `a page load does not override a manual media only hold`() {
+        var state = reduce(split(), MediaEvent.Manual(MediaMode.MEDIA_ONLY), nowMs = 0L)
+        state = reduce(state, MediaEvent.QmsPageLoaded, nowMs = 1_000L)
+        assertEquals(MediaMode.MEDIA_ONLY, state.mode)
+        assertEquals(MediaStateMachine.MANUAL_MEDIA_HOLD_MS, state.manualUntilMs)
+    }
+
+    @Test
+    fun `a reset returns to qms only and forgets the match`() {
+        var state = reduce(MediaState(), MediaEvent.Enabled(true))
+        state = reduce(state, MediaEvent.QmsProbe(true))
+        state = reduce(state, MediaEvent.Call(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_FOCUS, state.mode)
+
+        val reset = reduce(state, MediaEvent.QmsReset)
+        assertEquals(MediaMode.QMS_ONLY, reset.mode)
+        assertFalse(reset.qmsMatched)
+        assertFalse(reset.qmsDetectionHealthy)
+        assertEquals(0L, reset.dwellUntilMs)
+        assertEquals(0L, reset.manualUntilMs)
+        assertTrue(reset.enabled)
+    }
+
+    @Test
+    fun `a reset while disabled still clears the match history`() {
+        val state = MediaState(qmsMatched = true, qmsDetectionHealthy = true)
+        val reset = reduce(state, MediaEvent.QmsReset)
+        assertFalse(reset.qmsMatched)
+        assertEquals(MediaMode.QMS_ONLY, reset.mode)
     }
 
     @Test
@@ -112,6 +238,84 @@ class MediaStateMachineTest {
     fun `a call while qms only changes nothing`() {
         val state = MediaState(enabled = true, mode = MediaMode.QMS_ONLY)
         assertEquals(MediaMode.QMS_ONLY, reduce(state, MediaEvent.Call(true)).mode)
+    }
+
+    @Test
+    fun `a call during a manual qms only hold focuses and returns to the hold`() {
+        val held = reduce(split(), MediaEvent.Manual(MediaMode.QMS_ONLY), nowMs = 0L)
+        assertEquals(MediaMode.QMS_ONLY, held.mode)
+
+        val called = reduce(held, MediaEvent.Call(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_FOCUS, called.mode)
+        assertEquals(MediaMode.QMS_ONLY, called.returnMode)
+        assertEquals(1_000L + cfg.dwellSec * 1000L, called.dwellUntilMs)
+        // The hold itself survives the call.
+        assertEquals(MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS, called.manualUntilMs)
+
+        val afterDwell = reduce(called, MediaEvent.DwellElapsed, nowMs = 60_000L)
+        assertEquals(MediaMode.QMS_ONLY, afterDwell.mode)
+        assertEquals(MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS, afterDwell.manualUntilMs)
+    }
+
+    @Test
+    fun `a page load after a failure restores a live indefinite qms only hold`() {
+        val held = reduce(split(), MediaEvent.Manual(MediaMode.QMS_ONLY), nowMs = 0L)
+        val failed = reduce(held, MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, failed.mode)
+        assertEquals(MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS, failed.manualUntilMs)
+
+        val recovered = reduce(failed, MediaEvent.QmsPageLoaded, nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_ONLY, recovered.mode)
+        assertEquals(MediaStateMachine.MANUAL_INDEFINITE_UNTIL_MS, recovered.manualUntilMs)
+        assertTrue(recovered.qmsAvailable)
+    }
+
+    @Test
+    fun `a page load after a failure restores a live media only hold`() {
+        val held = reduce(split(), MediaEvent.Manual(MediaMode.MEDIA_ONLY), nowMs = 0L)
+        val failed = reduce(held, MediaEvent.QmsPageFailed)
+        assertEquals(MediaMode.MEDIA_ONLY, failed.mode)
+
+        val recovered = reduce(failed, MediaEvent.QmsPageLoaded, nowMs = 1_000L)
+        assertEquals(MediaMode.MEDIA_ONLY, recovered.mode)
+        assertEquals(MediaStateMachine.MANUAL_MEDIA_HOLD_MS, recovered.manualUntilMs)
+    }
+
+    @Test
+    fun `a page load during a live call with a hold does not cut the call short`() {
+        val held = reduce(split(), MediaEvent.Manual(MediaMode.QMS_ONLY), nowMs = 0L)
+        val called = reduce(held, MediaEvent.Call(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_FOCUS, called.mode)
+
+        val loaded = reduce(called, MediaEvent.QmsPageLoaded, nowMs = 2_000L)
+        assertEquals(MediaMode.QMS_FOCUS, loaded.mode)
+        assertEquals(MediaMode.QMS_ONLY, loaded.returnMode)
+        assertEquals(called.dwellUntilMs, loaded.dwellUntilMs)
+    }
+
+    @Test
+    fun `an empty call list is a healthy match that still boots split`() {
+        // An empty list means the container resolved but has no cards yet. It
+        // is reported as a passing probe, so it must satisfy the boot rule and
+        // must not degrade the page.
+        val booted = reduce(MediaState(), MediaEvent.Enabled(true))
+        assertEquals(MediaMode.QMS_ONLY, booted.mode)
+
+        val empty = reduce(booted, MediaEvent.QmsProbe(true))
+        assertEquals(MediaMode.SPLIT, empty.mode)
+        assertTrue(empty.qmsMatched)
+        assertTrue(empty.qmsDetectionHealthy)
+        assertTrue(empty.qmsAvailable)
+    }
+
+    @Test
+    fun `an empty list after a match keeps split healthy`() {
+        var state = reduce(MediaState(), MediaEvent.Enabled(true))
+        state = reduce(state, MediaEvent.QmsProbe(true))
+        assertEquals(MediaMode.SPLIT, state.mode)
+        state = reduce(state, MediaEvent.QmsProbe(true))
+        assertEquals(MediaMode.SPLIT, state.mode)
+        assertTrue(state.qmsDetectionHealthy)
     }
 
     @Test
@@ -309,7 +513,7 @@ class MediaStateMachineTest {
     }
 
     @Test
-    fun `re-enabling after a pause and an error starts clean in split`() {
+    fun `re-enabling after a pause and an error starts clean in the boot mode`() {
         var state = reduce(split(), MediaEvent.Lifecycle(true))
         state = reduce(state, MediaEvent.Overlay(true))
         state = reduce(state, MediaEvent.PlaybackError("boom"))
@@ -320,9 +524,11 @@ class MediaStateMachineTest {
         assertFalse(disabled.lifecyclePaused)
         assertEquals("", disabled.lastError)
 
+        // No match had been observed before the disable, so the boot rule puts
+        // the fresh enable back into full-screen QMS_ONLY, cleanly.
         val enabled = reduce(disabled, MediaEvent.Enabled(true))
         assertTrue(enabled.enabled)
-        assertEquals(MediaMode.SPLIT, enabled.mode)
+        assertEquals(MediaMode.QMS_ONLY, enabled.mode)
         assertFalse(enabled.paused)
         assertFalse(enabled.overlayVisible)
         assertFalse(enabled.lifecyclePaused)
@@ -354,5 +560,71 @@ class MediaStateMachineTest {
         val empty = reduce(state, MediaEvent.SourceChanged("", 0))
         assertEquals(0, empty.count)
         assertEquals(0, empty.index)
+    }
+
+    // ------------------------------------------------------------ audio chime
+
+    @Test
+    fun `an audio signal counts as a call only when the call source opts in`() {
+        assertEquals(
+            mapOf(
+                CallSource.DOM to false,
+                CallSource.DOM_OR_AUDIO to true,
+                CallSource.AUDIO to true
+            ),
+            CallSource.entries.associateWith { MediaStateMachine.audioCountsAsCall(it) }
+        )
+    }
+
+    @Test
+    fun `a dom change triggers a call unless the call source is audio only`() {
+        assertEquals(
+            mapOf(
+                CallSource.DOM to true,
+                CallSource.DOM_OR_AUDIO to true,
+                CallSource.AUDIO to false
+            ),
+            CallSource.entries.associateWith { MediaStateMachine.domTriggersCall(it) }
+        )
+    }
+
+    @Test
+    fun `an audio signal within a second of a dom call is a duplicate`() {
+        val lastDom = 10_000L
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom, lastDom))
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom + 999L, lastDom))
+        // At exactly 1 s it is a separate signal, not a duplicate.
+        assertFalse(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom + 1000L, lastDom))
+        // No DOM call yet means nothing to duplicate.
+        assertFalse(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom, 0L))
+        // A backwards clock is treated as a duplicate, never as a fresh call.
+        assertTrue(MediaStateMachine.audioIsDuplicateOfDomCall(lastDom - 1L, lastDom))
+    }
+
+    @Test
+    fun `the chime predicate combines the source and the dom debounce`() {
+        val audioOnly = cfg.copy(callSource = CallSource.AUDIO)
+        val domOrAudio = cfg.copy(callSource = CallSource.DOM_OR_AUDIO)
+        val domOnly = cfg.copy(callSource = CallSource.DOM)
+
+        // No DOM call has ever been observed: audio still moves the screen.
+        assertTrue(MediaStateMachine.audioTriggersCall(audioOnly, 5_000L, 0L))
+        assertTrue(MediaStateMachine.audioTriggersCall(domOrAudio, 5_000L, 0L))
+        // With callSource = dom the chime is ignored entirely.
+        assertFalse(MediaStateMachine.audioTriggersCall(domOnly, 5_000L, 0L))
+        // A chime right behind a DOM call does not double-arm the dwell.
+        assertFalse(MediaStateMachine.audioTriggersCall(domOrAudio, 5_500L, 5_000L))
+        assertTrue(MediaStateMachine.audioTriggersCall(domOrAudio, 6_500L, 5_000L))
+    }
+
+    @Test
+    fun `a chime call re-arms the dwell exactly like a dom call`() {
+        // The controller turns an accepted chime into the same Call event, so
+        // the reducer's semantics are identical; this pins the re-arm.
+        val first = reduce(split(), MediaEvent.Call(true), nowMs = 1_000L)
+        assertEquals(MediaMode.QMS_FOCUS, first.mode)
+        val second = reduce(first, MediaEvent.Call(true), nowMs = 3_000L)
+        assertEquals(MediaMode.QMS_FOCUS, second.mode)
+        assertTrue(second.dwellUntilMs > first.dwellUntilMs)
     }
 }

@@ -46,6 +46,8 @@ object StateJson {
         obj.put("mediaLocalFiles", state.mediaLocalFiles)
         obj.put("mediaLocalBytes", state.mediaLocalBytes)
         obj.put("mediaFreeBytes", state.mediaFreeBytes)
+        obj.put("playlistLastError", state.playlistLastError)
+        obj.put("playlistLastFetchMs", state.playlistLastFetchMs)
         obj.put("uiLanguage", state.uiLanguage)
         obj.put("screenWidthDp", state.screenWidthDp)
         obj.put("screenHeightDp", state.screenHeightDp)
