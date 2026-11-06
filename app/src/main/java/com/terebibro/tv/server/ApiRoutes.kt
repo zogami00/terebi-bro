@@ -107,6 +107,7 @@ class ApiRoutes(
 
         put(Method.POST to "/api/display", Route(Method.POST, true, setOf("fullscreen", "keepAwake"), handler = { _, _, v -> display(v) }))
         put(Method.POST to "/api/dpad", Route(Method.POST, true, setOf("key"), isDpad = true, handler = { _, _, v -> dpad(v) }))
+        put(Method.POST to "/api/text", Route(Method.POST, true, setOf("text", "submit"), handler = { _, _, v -> typeText(v) }))
 
         put(Method.POST to "/api/settings/device-name", Route(Method.POST, true, setOf("name"), handler = { _, _, v -> setDeviceName(v) }))
         put(Method.POST to "/api/settings/port", Route(Method.POST, true, setOf("port"), handler = { _, _, v -> setPort(v) }))
@@ -434,6 +435,12 @@ class ApiRoutes(
             return Http.error(Response.Status.BAD_REQUEST, "bad_key", "Unknown D-pad key")
         }
         return respond(host.dpad(key))
+    }
+
+    private fun typeText(values: Map<String, Json.Value>): Response {
+        val text = Json.requireString(values, "text", 500)
+        val submit = Json.optionalBool(values, "submit") ?: false
+        return respond(host.typeText(text, submit))
     }
 
     private fun setDeviceName(values: Map<String, Json.Value>): Response {

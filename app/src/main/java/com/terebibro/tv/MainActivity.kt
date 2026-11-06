@@ -45,6 +45,7 @@ import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
 import com.terebibro.tv.media.MediaPointer
+import com.terebibro.tv.media.MediaText
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaStore
 import com.terebibro.tv.media.MediaWebSurface
@@ -2087,6 +2088,30 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     override fun dpad(key: String): ApiResult =
         MainThreadBridge.runOnMain { it.routeSyntheticDpad(key) }
             ?: ApiResult.unavailable()
+
+    override fun typeText(text: String, submit: Boolean): ApiResult =
+        MainThreadBridge.runOnMain { it.typeIntoMediaPage(text, submit) }
+            ?: ApiResult.unavailable()
+
+    /**
+     * Types into the media page's focused text box. Enter is a real key event
+     * sent after the text lands (a script-made Enter is not trusted by pages),
+     * and only when a text box actually took the text.
+     */
+    private fun typeIntoMediaPage(text: String, submit: Boolean): ApiResult {
+        if (!mediaPageOwnsKeys()) {
+            return ApiResult.conflict("no_page", "Open a web page in media mode first")
+        }
+        val page = mediaWebSurface.view ?: return ApiResult.unavailable()
+        page.evaluateJavascript(MediaText.script(text)) { typed ->
+            if (submit && typed == "true") {
+                val now = SystemClock.uptimeMillis()
+                page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0))
+                page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0))
+            }
+        }
+        return ApiResult.ok()
+    }
 
     override fun setDeviceName(name: String): ApiResult {
         config.deviceName = name

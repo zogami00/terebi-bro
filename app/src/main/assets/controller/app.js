@@ -1358,6 +1358,13 @@
     $('dpadRight').addEventListener('click', function () { runAction('/api/dpad', { key: 'right' }); });
     $('dpadOk').addEventListener('click', function () { runAction('/api/dpad', { key: 'ok' }); });
     $('dpadBack').addEventListener('click', function () { runAction('/api/dpad', { key: 'back' }); });
+    // The text stays in the box, so a typo is fixed by editing and sending again.
+    function typeOnTv(submit) { runAction('/api/text', { text: $('typeInput').value, submit: submit }); }
+    $('typeButton').addEventListener('click', function () { typeOnTv(false); });
+    $('typeEnterButton').addEventListener('click', function () { typeOnTv(true); });
+    $('typeInput').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); typeOnTv(true); }
+    });
 
     $('restartWebview').addEventListener('click', function () {
       runAction('/api/webview/restart').then(function (result) {

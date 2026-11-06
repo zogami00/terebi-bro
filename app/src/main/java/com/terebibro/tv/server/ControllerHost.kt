@@ -42,6 +42,12 @@ interface ControllerHost {
 
     fun dpad(key: String): ApiResult
 
+    /**
+     * Replaces the text in the focused text box of the media page, then
+     * presses Enter when [submit] is true. Only while that page owns the keys.
+     */
+    fun typeText(text: String, submit: Boolean): ApiResult
+
     fun setDeviceName(name: String): ApiResult
 
     fun setControllerPort(port: Int): ApiResult
