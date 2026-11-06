@@ -1,6 +1,7 @@
 package com.terebibro.tv.media
 
 import android.content.Context
+import android.os.storage.StorageManager
 import android.os.StatFs
 import java.io.File
 import java.io.IOException
@@ -30,7 +31,15 @@ data class MediaFileInfo(
  * Nothing runs at construction: [sweepPartFiles] is called by the owner on its
  * IO executor so no disk I/O is added to the UI thread at startup.
  */
-class MediaStore(private val context: Context) {
+/**
+ * [localFolder] is `MediaSettings.mediaLocalFolder`: blank plays the app's own
+ * upload folder, anything else plays that folder on the TV or a USB/SD volume.
+ * Uploads, deletes and previews always use the app folder.
+ */
+class MediaStore(
+    private val context: Context,
+    private val localFolder: () -> String = { "" }
+) {
 
     /** Thrown by [upload] when the target name already exists; never an overwrite. */
     class DuplicateNameException(val name: String) : IOException("Duplicate media name")
@@ -46,8 +55,40 @@ class MediaStore(private val context: Context) {
         return dir
     }
 
+    /**
+     * The folder the local source plays, or null when it is unavailable (an
+     * unplugged USB drive, or no media-read permission yet): an empty library.
+     */
+    fun playDir(): File? {
+        val folder = localFolder()
+        if (folder.isEmpty()) return dir()
+        val dir = File(folder)
+        return if (dir.isDirectory && dir.canRead()) dir else null
+    }
+
+    /**
+     * The roots a folder may be picked from: internal shared storage and every
+     * mounted USB/SD volume, labelled the way the system names them. Derived
+     * from the app's external dirs (one per volume), which works on every API.
+     */
+    fun storageRoots(): List<Pair<String, File>> {
+        val sm = context.getSystemService(StorageManager::class.java)
+        return context.getExternalFilesDirs(null).filterNotNull().mapNotNull { appDir ->
+            val path = appDir.absolutePath
+            val cut = path.indexOf("/Android/data/")
+            if (cut <= 0) return@mapNotNull null
+            val root = File(path.substring(0, cut))
+            val label = try {
+                sm?.getStorageVolume(root)?.getDescription(context)
+            } catch (e: Exception) {
+                null
+            } ?: root.name
+            label to root
+        }
+    }
+
     fun list(): List<MediaItem> {
-        val dir = dir() ?: return emptyList()
+        val dir = playDir() ?: return emptyList()
         val files = try {
             dir.listFiles()
         } catch (e: Exception) {

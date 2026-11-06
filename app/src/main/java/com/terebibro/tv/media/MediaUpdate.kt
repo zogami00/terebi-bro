@@ -28,6 +28,7 @@ data class MediaUpdate(
     val historyCardMaxPx: Int? = null,
     val uiLanguage: String? = null,
     val mediaLocalEnabled: Boolean? = null,
+    val mediaLocalFolder: String? = null,
     val playlistEnabled: Boolean? = null,
     val playlistUrl: String? = null,
     val playlistRefreshSec: Int? = null,

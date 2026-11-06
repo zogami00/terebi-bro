@@ -248,7 +248,7 @@ phone, a top tab bar on wider screens), with tab state kept in `sessionStorage`:
 | Tab | What it holds |
 | --- | --- |
 | **Remote** | Now calling and what is playing, Media mode (QMS only / Split / Media only) and its Enabled switch, the D-pad with Back, Play/Pause and Next, and Text input (`POST /api/text`) for the media page. |
-| **Media** | Media URL (open now, open on start, default source), the Local folder (upload, list, preview, delete) and the Playlist. |
+| **Media** | Media URL (open now, open on start, default source), the Local folder (**Play from**: app storage or a folder picked on the TV's storage or a USB/SD drive; upload, list, preview, delete) and the Playlist. |
 | **QMS** | QMS URL with the strip/number/location/time selectors, call source and QMS UI scale; the QMS view (open URL, Back, Forward, Home, Reload, Stop). |
 | **Display** | Split layout (media band / header band / QMS strip, totalling 100 %), text sizes and UI language, QMS focus on call, image duration, media volume and image fill mode. |
 | **Settings** | Device name, controller port, Home URL, Fullscreen and Keep screen on, trusted networks, WebView restart/cache/site data, MQTT, diagnostics and unpair. |
@@ -411,6 +411,18 @@ URL (`POST /api/media/open`) replaces the queue until another source is chosen.
 An **`.m3u8` (HLS) URL** can be used directly in the playlist or in "Play from
 URL": it is handed to the platform `MediaPlayer`, which handles HLS on this
 range, and whether it actually plays depends on the stream's codecs.
+
+### Playing a folder from the TV or a USB drive
+
+The local source plays app storage (uploads) by default. **Media → Local folder →
+Choose folder…** browses the TV's internal shared storage and every mounted USB
+or SD volume, one level at a time (`POST /api/media/folders {"path": ""}` returns
+the roots), and **Play this folder** saves it as `mediaLocalFolder`. Android TV
+has no system folder picker, so the controller is the picker. The first browse
+shows Android's "access photos and videos" prompt on the TV (`READ_MEDIA_VIDEO`
+/ `READ_MEDIA_IMAGES`, or `READ_EXTERNAL_STORAGE` before Android 13). Only files
+directly in the folder play. Plugging or unplugging a drive re-reads the folder;
+while it is missing the local source is empty. Uploads always go to app storage.
 
 ### Web pages in the media band
 

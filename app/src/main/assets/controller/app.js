@@ -798,6 +798,53 @@
     setText('labelPxValue', intValue('mediaLabelPxInput') + ' px');
   }
 
+  /* Folder browser for "Play from". The TV lists one level at a time: a blank
+     path returns the storage roots (internal storage, USB, SD card). */
+  var folderBrowsePath = '';
+
+  function folderButton(label, path) {
+    var li = document.createElement('li');
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', function () { browseFolder(path); });
+    li.appendChild(button);
+    return li;
+  }
+
+  function browseFolder(path) {
+    var error = $('localFolderError');
+    error.textContent = '';
+    api('POST', '/api/media/folders', { path: path }).then(function (result) {
+      if (result.status !== 200 || !result.json) { error.textContent = apiError(result); return; }
+      var d = result.json;
+      folderBrowsePath = d.path || '';
+      var list = $('folderList');
+      while (list.firstChild) list.removeChild(list.firstChild);
+      if (!folderBrowsePath) {
+        setText('folderBrowserPath', 'Storage');
+        (d.roots || []).forEach(function (root) { list.appendChild(folderButton(root.label, root.path)); });
+      } else {
+        setText('folderBrowserPath', folderBrowsePath + '  —  ' + d.mediaCount + ' media file' + (d.mediaCount === 1 ? '' : 's'));
+        list.appendChild(folderButton('↑ Up', d.parent || ''));
+        (d.folders || []).forEach(function (f) { list.appendChild(folderButton(f.name, f.path)); });
+      }
+      $('folderUseButton').disabled = !folderBrowsePath;
+      show($('folderBrowser'));
+    });
+  }
+
+  function setLocalFolder(path) {
+    var error = $('localFolderError');
+    error.textContent = '';
+    api('POST', '/api/settings/media', { mediaLocalFolder: path }).then(function (result) {
+      if (result.status >= 400) { error.textContent = apiError(result); return; }
+      hide($('folderBrowser'));
+      setText('localFolderPath', path || 'App storage (uploads)');
+      flashSaved('localFolderSaved');
+    });
+  }
+
   function refreshMedia() {
     api('GET', '/api/settings/media', undefined).then(function (result) {
       if (result.status !== 200 || !result.json) return;
@@ -821,6 +868,7 @@
       setSelectIfIdle('mediaCallSourceInput', d.callSource);
       setCheckIfIdle('playlistEnabledToggle', d.playlistEnabled);
       setValueIfIdle('playlistUrlInput', d.playlistUrl);
+      setText('localFolderPath', d.mediaLocalFolder || 'App storage (uploads)');
       setValueIfIdle('playlistRefreshInput', d.playlistRefreshSec);
       // The stored page URL is only ever returned masked, so it is shown as a
       // placeholder instead of a value: an untouched field posts nothing and
@@ -1401,6 +1449,10 @@
     $('mediaEnabledToggle').addEventListener('change', function () { saveMedia('now'); });
     $('playlistEnabledToggle').addEventListener('change', function () { saveMedia('playlist'); });
     $('openMediaWeb').addEventListener('click', openMediaWeb);
+    $('browseFolderButton').addEventListener('click', function () { browseFolder(folderBrowsePath); });
+    $('folderCloseButton').addEventListener('click', function () { hide($('folderBrowser')); });
+    $('folderUseButton').addEventListener('click', function () { setLocalFolder(folderBrowsePath); });
+    $('useAppStorageButton').addEventListener('click', function () { setLocalFolder(''); });
     $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });

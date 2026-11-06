@@ -35,6 +35,7 @@ object MediaSettingsRecovery {
         const val HISTORY_CARD_MAX_PX = "mediaHistoryCardMaxPx"
         const val UI_LANGUAGE = "mediaUiLanguage"
         const val LOCAL_ENABLED = "mediaLocalEnabled"
+        const val LOCAL_FOLDER = "mediaLocalFolder"
         const val PLAYLIST_ENABLED = "mediaPlaylistEnabled"
         const val PLAYLIST_URL = "mediaPlaylistUrl"
         const val PLAYLIST_REFRESH_SEC = "mediaPlaylistRefreshSec"
@@ -111,6 +112,8 @@ object MediaSettingsRecovery {
             uiLanguage = UiLanguage.fromWire(string(raw, Keys.UI_LANGUAGE, d.uiLanguage.wire))
                 ?: d.uiLanguage,
             mediaLocalEnabled = bool(raw, Keys.LOCAL_ENABLED, d.mediaLocalEnabled),
+            mediaLocalFolder = string(raw, Keys.LOCAL_FOLDER, d.mediaLocalFolder)
+                .takeIf { MediaFolders.isValidSetting(it) } ?: d.mediaLocalFolder,
             playlistEnabled = bool(raw, Keys.PLAYLIST_ENABLED, d.playlistEnabled),
             playlistUrl = string(raw, Keys.PLAYLIST_URL, d.playlistUrl),
             playlistRefreshSec = int(

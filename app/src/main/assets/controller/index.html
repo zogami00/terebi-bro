@@ -166,6 +166,24 @@
 
     <section class="card" aria-labelledby="libraryHeading">
       <h2 id="libraryHeading">Local folder</h2>
+      <label>Play from</label>
+      <p id="localFolderPath" class="folder-path">App storage (uploads)</p>
+      <div class="row">
+        <button type="button" id="browseFolderButton" class="btn grow">Choose folder&hellip;</button>
+        <button type="button" id="useAppStorageButton" class="btn grow">Use app storage</button>
+      </div>
+      <div id="folderBrowser" class="folder-browser hidden">
+        <p id="folderBrowserPath" class="folder-path"></p>
+        <ul id="folderList" class="netlist"></ul>
+        <div class="row">
+          <button type="button" id="folderUseButton" class="btn primary grow">Play this folder</button>
+          <button type="button" id="folderCloseButton" class="btn">Cancel</button>
+        </div>
+      </div>
+      <p id="localFolderError" class="error" aria-live="polite"></p>
+      <span id="localFolderSaved" class="saved" role="status" aria-live="polite"></span>
+
+      <h3 class="subhead">App storage uploads</h3>
       <p id="librarySummary" class="muted">No files yet &mdash; upload one.</p>
       <label class="drop" for="libraryFileInput" id="uploadDrop">
         <span class="drop-title">Choose files</span>

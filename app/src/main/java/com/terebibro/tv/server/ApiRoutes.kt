@@ -7,6 +7,7 @@ import com.terebibro.tv.config.ConfigStore
 import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.media.MediaFileInfo
 import com.terebibro.tv.media.MediaFileRules
+import com.terebibro.tv.media.MediaFolders
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaSettings
@@ -151,6 +152,7 @@ class ApiRoutes(
         // Forces a library re-read while the app is in the foreground. A push
         // that leaves the folder's mtime unchanged is otherwise invisible until
         // the next resume.
+        put(Method.POST to "/api/media/folders", Route(Method.POST, true, setOf("path"), handler = { _, _, v -> mediaFolders(v) }))
         put(Method.POST to "/api/media/rescan", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> mediaRescan() }))
 
         // Library. The upload is the one binary request; the JSON framing rule
@@ -609,6 +611,7 @@ class ApiRoutes(
                 historyCardMaxPx = Json.optionalInt(values, "historyCardMaxPx"),
                 uiLanguage = Json.optionalString(values, "uiLanguage", MAX_ENUM_WIRE),
                 mediaLocalEnabled = Json.optionalBool(values, "mediaLocalEnabled"),
+                mediaLocalFolder = Json.optionalString(values, "mediaLocalFolder", MediaFolders.MAX_LENGTH),
                 playlistEnabled = Json.optionalBool(values, "playlistEnabled"),
                 playlistUrl = Json.optionalString(values, "playlistUrl", UrlValidator.MAX_LENGTH),
                 playlistRefreshSec = Json.optionalInt(values, "playlistRefreshSec"),
@@ -691,6 +694,7 @@ class ApiRoutes(
             "historyCardMaxPx" to settings.historyCardMaxPx,
             "uiLanguage" to settings.uiLanguage.wire,
             "mediaLocalEnabled" to settings.mediaLocalEnabled,
+            "mediaLocalFolder" to settings.mediaLocalFolder,
             "playlistEnabled" to settings.playlistEnabled,
             "playlistUrl" to settings.playlistUrl,
             "playlistRefreshSec" to settings.playlistRefreshSec,
@@ -759,6 +763,11 @@ class ApiRoutes(
      * next state broadcast carries the settled figures, and the caller refreshes
      * the listing from `/api/media/files` independently.
      */
+    private fun mediaFolders(values: Map<String, Json.Value>): Response {
+        val path = Json.optionalString(values, "path", MediaFolders.MAX_LENGTH) ?: ""
+        return respond(host.mediaFolders(path))
+    }
+
     private fun mediaRescan(): Response {
         host.onMediaLibraryChanged()
         val state = host.buildState()
@@ -1121,7 +1130,7 @@ class ApiRoutes(
             "historyCardMinPx", "historyCardMaxPx", "uiLanguage", "mediaLocalEnabled",
             "playlistEnabled", "playlistUrl", "playlistRefreshSec", "imageDurationSec",
             "volumePercent", "mediaFillMode", "newCallHighlight", "uiScale",
-            "mediaWebUrl", "mediaWebEnabled", "mediaSourceDefault"
+            "mediaWebUrl", "mediaWebEnabled", "mediaSourceDefault", "mediaLocalFolder"
         )
     }
 }

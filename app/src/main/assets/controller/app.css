@@ -592,3 +592,22 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 
 .preview:empty { display: none; }
 .preview img, .preview video { display: block; }
+
+/* ---------------------------------------------------------- folder picker */
+
+.folder-path {
+  margin: 0;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.folder-browser {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.folder-browser .netlist li button { flex: 1; text-align: left; }

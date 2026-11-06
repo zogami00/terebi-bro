@@ -2,7 +2,14 @@ package com.terebibro.tv
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import org.json.JSONArray
+import org.json.JSONObject
 import android.content.res.Configuration
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -44,6 +51,7 @@ import com.terebibro.tv.media.MediaKeyRoute
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
+import com.terebibro.tv.media.MediaFolders
 import com.terebibro.tv.media.MediaPointer
 import com.terebibro.tv.media.MediaText
 import com.terebibro.tv.media.MediaSettings
@@ -264,7 +272,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             if (::mediaController.isInitialized) mediaController.onQmsSignal(kind, value)
         }
 
-        mediaStore = MediaStore(this)
+        mediaStore = MediaStore(this) { config.mediaSettings.mediaLocalFolder }
+        registerStorageReceiver()
         // The second renderer is created lazily on the first web source, but
         // the surface object exists now so the controller can own its focus and
         // lifecycle without Android types.
@@ -310,7 +319,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 override fun onPlaybackError(message: String) = mediaController.playbackError(message)
                 override fun onPlaybackPausedByFocus() = mediaController.onPlaybackPausedByFocus()
                 override fun onFocusGained() = mediaController.onFocusGained()
-            }
+            },
+            mediaStore
         )
         mediaController.attach(host)
         // Install the observer before the first load when media mode is already
@@ -420,7 +430,90 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // appear without a settings change; the controller re-reads the folder
         // off the UI thread and keeps the playing item when it still exists.
         mediaController.onResumeRescan()
+        // A picked folder outside app storage needs the media-read permission;
+        // ask once per launch (the grant returns through onResume above).
+        if (config.mediaSettings.mediaLocalFolder.isNotEmpty() && !hasMediaReadPermission() &&
+            !mediaPermissionAsked
+        ) {
+            mediaPermissionAsked = true
+            requestPermissions(mediaReadPermissions, REQUEST_MEDIA_READ)
+        }
         if (config.fullscreen) enterImmersiveMode()
+    }
+
+    // ---------------------------------------------------------------------
+    // Local folder on the TV or a USB/SD volume
+    // ---------------------------------------------------------------------
+
+    private var mediaPermissionAsked = false
+
+    private val mediaReadPermissions: Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+    private fun hasMediaReadPermission(): Boolean =
+        mediaReadPermissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
+    /** A USB drive or SD card mounted or removed: re-read the play folder. */
+    private val storageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = onMediaLibraryChanged()
+    }
+
+    private fun registerStorageReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_MEDIA_MOUNTED)
+            addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(Intent.ACTION_MEDIA_REMOVED)
+            addAction(Intent.ACTION_MEDIA_EJECT)
+            addDataScheme("file")
+        }
+        // System broadcasts reach a not-exported receiver.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(storageReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(storageReceiver, filter)
+        }
+    }
+
+    override fun mediaFolders(path: String): ApiResult =
+        MainThreadBridge.runOnMain { it.listMediaFolders(path) } ?: ApiResult.unavailable()
+
+    /**
+     * One level of the folder browser. A blank [path] returns only the roots.
+     * Without the media-read permission the TV shows the system prompt and the
+     * controller is told to retry once it is allowed.
+     */
+    private fun listMediaFolders(path: String): ApiResult {
+        if (!hasMediaReadPermission()) {
+            requestPermissions(mediaReadPermissions, REQUEST_MEDIA_READ)
+            return ApiResult.conflict(
+                "permission_needed",
+                "Allow access to photos and videos on the TV, then try again"
+            )
+        }
+        // ponytail: lists on the main thread; fine for a folder, move to io if a huge USB tree stalls the UI.
+        val roots = mediaStore.storageRoots()
+        val rootFiles = roots.map { it.second }
+        val rootsJson = JSONArray()
+        roots.forEach { (label, dir) -> rootsJson.put(JSONObject().put("label", label).put("path", dir.absolutePath)) }
+        if (path.isEmpty()) {
+            return ApiResult.ok("path" to "", "parent" to "", "roots" to rootsJson, "folders" to JSONArray(), "mediaCount" to 0)
+        }
+        val dir = MediaFolders.within(rootFiles, path)
+            ?: return ApiResult.badRequest("bad_folder", "Folder not found on the TV")
+        val folders = JSONArray()
+        MediaFolders.subfolders(dir).forEach { folders.put(JSONObject().put("name", it.name).put("path", it.absolutePath)) }
+        val parent = dir.parentFile?.let { MediaFolders.within(rootFiles, it.path) }?.absolutePath ?: ""
+        return ApiResult.ok(
+            "path" to dir.absolutePath,
+            "parent" to parent,
+            "roots" to rootsJson,
+            "folders" to folders,
+            "mediaCount" to MediaFolders.mediaCount(dir)
+        )
     }
 
     override fun onPause() {
@@ -471,6 +564,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     override fun onDestroy() {
         unregisterBackHandling()
+        try {
+            unregisterReceiver(storageReceiver)
+        } catch (ignored: Exception) {
+            // Never registered.
+        }
         networkCallback?.let {
             try {
                 (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
@@ -2446,6 +2544,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     private companion object {
         const val TAG = "MainActivity"
+        const val REQUEST_MEDIA_READ = 41
 
         /**
          * Last-resort metrics for when the main-thread hop times out: the

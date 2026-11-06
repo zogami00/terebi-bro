@@ -95,6 +95,12 @@ interface ControllerHost {
      */
     fun onMediaLibraryChanged()
 
+    /**
+     * One level of the folder browser for `mediaLocalFolder`: the storage roots,
+     * and for a non-blank [path] its subfolders and playable-file count.
+     */
+    fun mediaFolders(path: String): ApiResult
+
     /** The dp metrics the layout is authored against. */
     fun screenMetrics(): ScreenMetrics
 }
