@@ -994,6 +994,18 @@ strings/fragments, masks token/PIN/secret/cookie/authorization key-value pairs,
 and redacts bearer credentials. Tokens, their hashes, the PIN, `/api/pair`
 bodies and WebSocket `auth` messages are never logged.
 
+In a **debug** build the QMS detection path emits extra short, single-line
+diagnostics under the `TerebiBro/Qms` tag (`BuildConfig.DEBUG`; absent from a
+release build): one line per accepted signal (`qms signal=now|probe|ready|audio`,
+with the queue-number key parts for `now`), the probe result plus the resulting
+`qmsMatched`/`healthy` flags, the call-key comparison
+(`qms call prev=… now=… newCall=…`), the dwell arm/re-arm/expiry with the
+remaining seconds, and the existing `media layout mode=… via=call|manual|boot|default`
+line. The `media layout` line is emitted only when a pass actually changes the
+mode, the band geometry or a surface's visibility — not on the page's
+one-second probe heartbeat. They carry no URLs or credentials — the `now`
+values are queue numbers.
+
 ## Documentation
 
 - `docs/implementation-plan.md` — the original implementation plan (verbatim).
@@ -1081,7 +1093,7 @@ real-hardware behaviour remains unverified.
 
 V2 is validated **at the JVM and build level only**:
 
-- `testDebugUnitTest` passes: **591 JVM tests, 0 failures, 1 skipped** (a symlink
+- `testDebugUnitTest` passes: **600 JVM tests, 0 failures, 1 skipped** (a symlink
   test skipped on Windows). This includes the media reducer and layout, the
   settings validator, the QMS call key, signal clamp and injected-script
   escaping, the media queue and playlist parser, the upload rules, the media

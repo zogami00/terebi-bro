@@ -342,7 +342,11 @@ class MediaWebSurface(
      * re-assert is what leaves the page focused once the layout has settled.
      */
     private fun requestPageFocus(web: WebView) {
-        web.requestFocus()
+        // A view that already holds Android focus is left alone: a redundant
+        // requestFocus() makes WebView reset the page's DOM focus, so the item
+        // the D-pad just selected would lose its highlight and the next press
+        // would land nowhere.
+        if (!web.hasFocus()) web.requestFocus()
         web.post {
             if (focusable && web.visibility == View.VISIBLE && !web.hasFocus()) {
                 web.requestFocus()

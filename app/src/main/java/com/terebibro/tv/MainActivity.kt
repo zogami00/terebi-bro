@@ -192,6 +192,35 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private var lastMediaMode = MediaMode.QMS_ONLY
 
     /**
+     * The state the last layout pass left behind. A pass whose starting key
+     * equals this one would assign the same params and visibilities as the
+     * previous pass, so it is skipped: the QMS fallback probe can reach the
+     * controller once a second, and re-applying the layout (and re-requesting
+     * focus) on every tick would reset the media page's DOM focus and drop the
+     * D-pad selection.
+     */
+    private var appliedMediaLayout: MediaLayoutKey? = null
+
+    /**
+     * Everything [applyMediaLayoutOnMain] reads before it mutates a view. The
+     * current visibilities are part of it, so a late callback that re-shows a
+     * surface still differs from the cached key and is repaired.
+     */
+    private data class MediaLayoutKey(
+        val mode: MediaMode,
+        val widthPx: Int,
+        val heightPx: Int,
+        val density: Float,
+        val headerBandPercent: Int,
+        val stripHeightPercent: Int,
+        val webSource: Boolean,
+        val customViewVisible: Boolean,
+        val mediaVisibility: Int,
+        val webVisibility: Int,
+        val qmsVisibility: Int
+    )
+
+    /**
      * Logged once when the synthetic-key guard had to drop a key that would
      * otherwise have reached the QMS view while `MEDIA_ONLY` with a web source
      * owns the screen. The route predicate should make this unreachable; the
@@ -1122,6 +1151,12 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         ) {
             hideMediaFullscreen()
         }
+        // One apply per real change. The probe heartbeat reaches this function
+        // once a second; skipping an identical pass keeps LayoutParams, the
+        // band page's layout and the focus target untouched, so a D-pad
+        // selection in the page survives between presses.
+        val layoutKey = mediaLayoutKey(mode)
+        if (layoutKey == appliedMediaLayout) return
         val mediaParams = mediaContainer.layoutParams as FrameLayout.LayoutParams
         val webParams = webViewContainer.layoutParams as FrameLayout.LayoutParams
 
@@ -1213,8 +1248,33 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 webViewController.requestWebFocus()
             }
         }
+        // Cache the state this pass *produced*, not the one it started from:
+        // the pass itself changes visibilities, and caching the pre-pass key
+        // would make the next call look like a change.
+        appliedMediaLayout = mediaLayoutKey(mode)
         updateMediaMenuVisibility()
         logMediaLayoutOnMain(mode)
+    }
+
+    /**
+     * The inputs [applyMediaLayoutOnMain] derives its result from, captured
+     * before it mutates any view.
+     */
+    private fun mediaLayoutKey(mode: MediaMode): MediaLayoutKey {
+        val metrics = resources.displayMetrics
+        return MediaLayoutKey(
+            mode = mode,
+            widthPx = metrics.widthPixels,
+            heightPx = metrics.heightPixels,
+            density = metrics.density,
+            headerBandPercent = config.mediaSettings.headerBandPercent,
+            stripHeightPercent = config.mediaSettings.stripHeightPercent,
+            webSource = mediaController.isWebSource(),
+            customViewVisible = customView != null,
+            mediaVisibility = mediaContainer.visibility,
+            webVisibility = webViewContainer.visibility,
+            qmsVisibility = webViewController.contentVisibility()
+        )
     }
 
     /**
@@ -1230,9 +1290,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun logMediaLayout(mode: MediaMode) {
         val page = if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null
         val pageState = if (page == null) "absent" else "${visibilityName(page.visibility)} h=${page.height}"
+        val via = if (::mediaController.isInitialized) mediaController.modeVia() else "default"
         SafeLog.d(
             TAG,
-            "media layout mode=${mode.wire} " +
+            "media layout mode=${mode.wire} via=$via " +
                 "webviewContainer=${visibilityName(webViewContainer.visibility)} " +
                 "mediaWeb=$pageState focus=${focusOwner()}"
         )
