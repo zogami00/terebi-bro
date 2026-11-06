@@ -23,7 +23,7 @@
   var networks = [];
   var mqttPasswordSet = false;
   var mediaPaused = false;
-  var activeTab = 'now';
+  var activeTab = 'remote';
   var savedTimers = {};
 
   function $(id) { return document.getElementById(id); }
@@ -74,7 +74,7 @@
   /* -------------------------------------------------------------------- tabs */
 
   var TAB_KEY = 'terebi.tab';
-  var TAB_NAMES = ['now', 'content', 'display', 'device'];
+  var TAB_NAMES = ['remote', 'media', 'qms', 'display', 'settings'];
 
   function tabButton(name) { return $('tab-' + name); }
   function tabPanel(name) { return $('panel-' + name); }
@@ -94,7 +94,7 @@
      page needs to know nothing about tabs. aria-selected and a roving tabindex
      keep the tablist keyboard-navigable. */
   function selectTab(name, focusTab) {
-    if (TAB_NAMES.indexOf(name) < 0) name = 'now';
+    if (TAB_NAMES.indexOf(name) < 0) name = 'remote';
     activeTab = name;
     for (var i = 0; i < TAB_NAMES.length; i++) {
       var n = TAB_NAMES[i];
@@ -297,7 +297,7 @@
 
   function handleEvent(message) {
     if (message.name === 'page_error') {
-      banner('The TV browser could not load the page.');
+      banner('The QMS view could not load the page.');
     } else if (message.name === 'webview_restarted') {
       banner('WebView restarted.');
     } else if (message.name === 'port_changing') {
@@ -380,10 +380,10 @@
   }
 
   var SOURCE_LABELS = {
-    local: 'Folder on the TV',
-    playlist: 'Web playlist',
-    url: 'A web address',
-    web: 'A web page'
+    local: 'Local folder',
+    playlist: 'Playlist',
+    url: 'URL',
+    web: 'Media URL'
   };
 
   function sourceLabel(state) {
@@ -420,12 +420,12 @@
     var count = Number(state.mediaCount) || 0;
     var index = Number(state.mediaIndex) || 0;
     if (!state.mediaEnabled) {
-      setText('nowMedia', 'The media screen is off');
+      setText('nowMedia', 'Media mode off');
     } else if (item) {
       var position = count > 1 && index >= 0 ? ' (' + (index + 1) + ' of ' + count + ')' : '';
       setText('nowMedia', item + position);
     } else if (state.mediaSource === 'web') {
-      setText('nowMedia', 'A web page');
+      setText('nowMedia', 'Media URL');
     } else {
       setText('nowMedia', 'Nothing playing');
     }
@@ -688,17 +688,17 @@
   }
 
   var MODE_LABELS = {
-    qms_only: 'Queue board only',
-    qms_focus: 'Queue board only',
-    split: 'Split screen',
+    qms_only: 'QMS only',
+    qms_focus: 'QMS focus',
+    split: 'Split',
     media_only: 'Media only'
   };
 
-  /* The header and the Now tab speak plain words; `mediaModeState` keeps the
+  /* The header and the Remote tab speak plain words; `mediaModeState` keeps the
      raw wire value for the diagnostics-minded. */
   function setMediaModeLine(mode) {
     setText('mediaModeState', 'Mode: ' + (mode || 'qms_only'));
-    setText('headerMode', MODE_LABELS[mode] || 'Queue board only');
+    setText('headerMode', MODE_LABELS[mode] || 'QMS only');
     var pressed = {
       mediaModeQms: mode === 'qms_only' || mode === 'qms_focus',
       mediaModeSplit: mode === 'split',
@@ -976,7 +976,7 @@
         return;
       }
       if (result.json && result.json.applied === false) {
-        banner('The media screen is off. Turn it on in the Now tab.');
+        banner('Media mode is off. Enable it in the Remote tab.');
       }
     });
   }
@@ -1315,7 +1315,7 @@
   }
 
   function unpair() {
-    if (!confirmAction('Unpair this device? You will need the PIN shown on the TV to pair again.')) return;
+    if (!confirmAction('Unpair this controller? You will need the PIN shown on the TV to pair again.')) return;
     api('POST', '/api/unpair', {}).then(function () { logout(); });
   }
 
@@ -1333,7 +1333,7 @@
     if (warningLink) {
       warningLink.addEventListener('click', function (event) {
         event.preventDefault();
-        selectTab('content', false);
+        selectTab('qms', false);
         var first = $('mediaQmsUrlInput');
         if (first) first.focus();
       });
@@ -1368,7 +1368,7 @@
 
     $('restartWebview').addEventListener('click', function () {
       runAction('/api/webview/restart').then(function (result) {
-        if (result.status < 400) flashSaved('browserSaved', 'Restarting the TV browser\u2026');
+        if (result.status < 400) flashSaved('browserSaved', 'Restarting WebView\u2026');
       });
     });
     $('clearCache').addEventListener('click', function () {

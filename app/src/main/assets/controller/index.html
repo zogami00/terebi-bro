@@ -11,58 +11,66 @@
 </head>
 <body>
 
-<div class="app-shell">
-  <header class="app-header">
-    <div class="header-row">
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
       <h1 class="device-name"><span id="statusDevice">Terebi Bro</span></h1>
-      <p class="pill">
-        <span id="statusDot" class="dot offline" aria-hidden="true"></span>
-        <span id="statusText">Offline</span>
-      </p>
+      <p class="mode-line">Mode <strong id="headerMode">&mdash;</strong></p>
     </div>
-    <p class="mode-line">On screen: <strong id="headerMode">&mdash;</strong></p>
-    <p id="qmsWarning" class="header-warn hidden">
-      <a id="qmsWarningLink" href="#panel-content">Queue board not detected &mdash; check the address and selectors</a>
+    <p class="pill">
+      <span id="statusDot" class="dot offline" aria-hidden="true"></span>
+      <span id="statusText">Offline</span>
     </p>
-  </header>
+  </div>
+  <p id="qmsWarning" class="header-warn hidden">
+    <a id="qmsWarningLink" href="#panel-qms">QMS not detected &mdash; check the QMS URL and selectors</a>
+  </p>
+</header>
 
-  <nav id="tabbar" class="tabbar hidden" role="tablist" aria-label="Controller sections">
-    <button type="button" id="tab-now" class="tab" role="tab" aria-selected="true"
-            aria-controls="panel-now" data-tab="now" tabindex="0">Now</button>
-    <button type="button" id="tab-content" class="tab" role="tab" aria-selected="false"
-            aria-controls="panel-content" data-tab="content" tabindex="-1">Content</button>
-    <button type="button" id="tab-display" class="tab" role="tab" aria-selected="false"
-            aria-controls="panel-display" data-tab="display" tabindex="-1">Display</button>
-    <button type="button" id="tab-device" class="tab" role="tab" aria-selected="false"
-            aria-controls="panel-device" data-tab="device" tabindex="-1">Device</button>
-  </nav>
-</div>
+<nav id="tabbar" class="tabbar hidden" role="tablist" aria-label="Controller sections">
+  <button type="button" id="tab-remote" class="tab" role="tab" aria-selected="true"
+          aria-controls="panel-remote" data-tab="remote" tabindex="0">
+    <span class="tab-icon" aria-hidden="true">&#9673;</span>Remote</button>
+  <button type="button" id="tab-media" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-media" data-tab="media" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9654;</span>Media</button>
+  <button type="button" id="tab-qms" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-qms" data-tab="qms" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">#</span>QMS</button>
+  <button type="button" id="tab-display" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-display" data-tab="display" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9636;</span>Display</button>
+  <button type="button" id="tab-settings" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-settings" data-tab="settings" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9881;</span>Settings</button>
+</nav>
 
 <div id="errorBanner" class="banner hidden" role="alert"></div>
 
 <!-- Pairing -->
 <section id="pairingScreen" class="pairing card hidden" aria-labelledby="pairHeading">
-  <h2 id="pairHeading">Pair this device</h2>
-  <p class="muted">Enter the pairing PIN shown on the TV.</p>
-  <label for="pairPin">PIN</label>
+  <h2 id="pairHeading">Pair controller</h2>
+  <p class="muted">Enter the pairing PIN shown on the TV (Menu &rarr; Settings).</p>
+  <label for="pairPin">Pairing PIN</label>
   <input id="pairPin" type="tel" inputmode="numeric" maxlength="6" autocomplete="off">
-  <label for="pairName">Device name</label>
+  <label for="pairName">Controller name</label>
   <input id="pairName" type="text" maxlength="40" autocomplete="off">
-  <button id="pairButton" class="btn primary" type="button">Pair</button>
+  <button id="pairButton" class="btn primary block" type="button">Pair</button>
   <p id="pairError" class="error" aria-live="polite"></p>
 </section>
 
-<!-- Main -->
 <main id="mainScreen" class="hidden">
 
-  <!-- ================================================================ NOW -->
-  <section id="panel-now" class="panel" role="tabpanel" aria-labelledby="tab-now" tabindex="0">
+  <!-- ============================================================= REMOTE -->
+  <section id="panel-remote" class="panel" role="tabpanel" aria-labelledby="tab-remote" tabindex="0">
 
-    <section class="card" aria-labelledby="nowHeading">
-      <h2 id="nowHeading">On screen now</h2>
-      <p class="eyebrow">Now calling</p>
-      <p id="nowNumber" class="call-number">Nothing called yet</p>
-      <p id="nowLocation" class="call-location"></p>
+    <section class="card now" aria-labelledby="nowHeading">
+      <h2 id="nowHeading" class="sr-only">Now</h2>
+      <div class="now-call">
+        <p class="eyebrow">Now calling</p>
+        <p id="nowNumber" class="call-number">Nothing called yet</p>
+        <p id="nowLocation" class="call-location"></p>
+      </div>
       <dl class="facts">
         <dt>Playing</dt><dd id="nowMedia">&mdash;</dd>
         <dt>Source</dt><dd id="nowSource">&mdash;</dd>
@@ -71,56 +79,84 @@
     </section>
 
     <section class="card" aria-labelledby="modeHeading">
-      <h2 id="modeHeading">What the TV shows</h2>
-      <p class="muted small">Changes immediately. The TV keeps showing the choice until you change it.</p>
-      <div class="mode-group" role="group" aria-label="Screen layout">
+      <div class="card-head">
+        <h2 id="modeHeading">Media mode</h2>
+        <label class="switch" for="mediaEnabledToggle">
+          <input id="mediaEnabledToggle" type="checkbox">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>Enabled</span>
+        </label>
+      </div>
+      <div class="segmented" role="group" aria-label="Media mode">
         <button type="button" id="mediaModeQms" class="mode-btn" aria-pressed="false">
-          <span class="mode-title">Queue board only</span>
-          <span class="mode-sub">The clinic board, full screen</span>
+          <span class="mode-title">QMS only</span>
+          <span class="mode-sub">Full screen</span>
         </button>
         <button type="button" id="mediaModeSplit" class="mode-btn" aria-pressed="false">
-          <span class="mode-title">Split screen</span>
-          <span class="mode-sub">Media beside the queue board</span>
+          <span class="mode-title">Split</span>
+          <span class="mode-sub">Media + strip</span>
         </button>
         <button type="button" id="mediaModeMedia" class="mode-btn" aria-pressed="false">
           <span class="mode-title">Media only</span>
-          <span class="mode-sub">Your videos and images, full screen</span>
+          <span class="mode-sub">Full screen</span>
         </button>
       </div>
-      <label class="check" for="mediaEnabledToggle">
-        <input id="mediaEnabledToggle" type="checkbox">
-        <span>Use the media screen on this TV</span>
-      </label>
       <p id="mediaModeState" class="hidden"></p>
       <p id="modeError" class="error" aria-live="polite"></p>
     </section>
 
-    <section class="card" aria-labelledby="playbackHeading">
-      <h2 id="playbackHeading">Playback</h2>
+    <section class="card tall" aria-labelledby="remoteHeading">
+      <h2 id="remoteHeading">D-pad</h2>
+      <div class="dpad" role="group" aria-label="D-pad">
+        <button type="button" id="dpadUp" class="dpad-btn up" aria-label="Up">&#9650;</button>
+        <button type="button" id="dpadLeft" class="dpad-btn left" aria-label="Left">&#9664;</button>
+        <button type="button" id="dpadOk" class="dpad-btn ok" aria-label="OK">OK</button>
+        <button type="button" id="dpadRight" class="dpad-btn right" aria-label="Right">&#9654;</button>
+        <button type="button" id="dpadDown" class="dpad-btn down" aria-label="Down">&#9660;</button>
+      </div>
       <div class="row">
+        <button type="button" id="dpadBack" class="btn grow">Back</button>
         <button type="button" id="mediaPlayPause" class="btn grow">Pause</button>
         <button type="button" id="mediaNext" class="btn grow">Next</button>
       </div>
-      <p class="hint">These control the media screen while it is on.</p>
+      <p class="hint">In Media only mode on a web page, hold OK on the TV remote to toggle the pointer.</p>
+    </section>
 
-      <h3 class="subhead">Web page on the TV</h3>
-      <label for="mediaWebUrlInput">Web page address</label>
+    <section class="card" aria-labelledby="typeHeading">
+      <h2 id="typeHeading">Text input</h2>
+      <label for="typeInput">Replaces the text in the focused text field on the media page</label>
+      <input id="typeInput" type="text" autocomplete="off" enterkeyhint="send"
+             maxlength="500" placeholder="Search or text">
+      <div class="row">
+        <button type="button" id="typeButton" class="btn grow">Send</button>
+        <button type="button" id="typeEnterButton" class="btn primary grow">Send + Enter</button>
+      </div>
+    </section>
+  </section>
+
+  <!-- ============================================================== MEDIA -->
+  <section id="panel-media" class="panel hidden" role="tabpanel" aria-labelledby="tab-media" tabindex="0">
+
+    <section class="card" aria-labelledby="webHeading">
+      <h2 id="webHeading">Media URL</h2>
+      <label for="mediaWebUrlInput">Web page shown in the media band</label>
       <input id="mediaWebUrlInput" type="text" inputmode="url" autocomplete="off"
              placeholder="https://jellyfin.example.com/web">
-      <p class="hint">Leave it blank to keep the page already saved on the TV.</p>
+      <p class="hint">Leave blank to keep the saved Media URL.</p>
       <div class="row">
-        <button type="button" id="openMediaWeb" class="btn grow">Show it now</button>
+        <button type="button" id="openMediaWeb" class="btn grow">Open now</button>
       </div>
       <p id="mediaWebError" class="error" aria-live="polite"></p>
-      <label class="check" for="mediaWebEnabledToggle">
+      <label class="switch" for="mediaWebEnabledToggle">
         <input id="mediaWebEnabledToggle" type="checkbox">
-        <span>Open this page when the TV starts</span>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Open Media URL on start</span>
       </label>
-      <label for="mediaSourceDefaultInput">What the TV starts with</label>
+      <label for="mediaSourceDefaultInput">Default source</label>
       <select id="mediaSourceDefaultInput">
-        <option value="local">The folder on the TV</option>
-        <option value="playlist">The web playlist</option>
-        <option value="web">The web page above</option>
+        <option value="local">Local folder</option>
+        <option value="playlist">Playlist</option>
+        <option value="web">Media URL</option>
       </select>
       <div class="row">
         <button type="button" id="saveMediaWeb" class="btn primary">Save</button>
@@ -128,47 +164,18 @@
       </div>
     </section>
 
-    <section class="card" aria-labelledby="remoteHeading">
-      <h2 id="remoteHeading">Remote</h2>
-      <div class="dpad" role="group" aria-label="Directional pad">
-        <button type="button" id="dpadUp" class="dpad-btn up" aria-label="Up">&#8593;</button>
-        <button type="button" id="dpadLeft" class="dpad-btn left" aria-label="Left">&#8592;</button>
-        <button type="button" id="dpadOk" class="dpad-btn ok primary" aria-label="OK">OK</button>
-        <button type="button" id="dpadRight" class="dpad-btn right" aria-label="Right">&#8594;</button>
-        <button type="button" id="dpadDown" class="dpad-btn down" aria-label="Down">&#8595;</button>
-      </div>
-      <div class="row">
-        <button type="button" id="dpadBack" class="btn grow">Back</button>
-      </div>
-
-      <h3 class="subhead">Type on the TV</h3>
-      <label for="typeInput" class="muted">Select a text box on the TV first. This replaces its text.</label>
-      <input id="typeInput" type="text" autocomplete="off" enterkeyhint="send"
-             maxlength="500" placeholder="Search or text">
-      <div class="row wrap">
-        <button type="button" id="typeButton" class="btn">Type</button>
-        <button type="button" id="typeEnterButton" class="btn primary">Type + Enter</button>
-      </div>
-    </section>
-  </section>
-
-  <!-- ============================================================ CONTENT -->
-  <section id="panel-content" class="panel hidden" role="tabpanel" aria-labelledby="tab-content" tabindex="0">
-
     <section class="card" aria-labelledby="libraryHeading">
-      <h2 id="libraryHeading">Videos and images</h2>
-      <p id="librarySummary" class="muted">No videos yet &mdash; upload one.</p>
-
+      <h2 id="libraryHeading">Local folder</h2>
+      <p id="librarySummary" class="muted">No files yet &mdash; upload one.</p>
       <label class="drop" for="libraryFileInput" id="uploadDrop">
-        <span class="drop-title">Choose videos or images</span>
-        <span class="drop-sub">Drag files here, or tap to pick. MP4, JPG and PNG.</span>
+        <span class="drop-title">Choose files</span>
+        <span class="drop-sub">Drop or tap to pick &middot; MP4, JPG, PNG</span>
         <input id="libraryFileInput" type="file"
                accept="video/mp4,image/jpeg,image/png" multiple>
       </label>
-
       <div class="row">
         <button type="button" id="uploadButton" class="btn primary grow">Upload</button>
-        <button type="button" id="libraryReloadButton" class="btn grow">Reload list</button>
+        <button type="button" id="libraryReloadButton" class="btn grow">Refresh</button>
       </div>
       <p id="uploadProgress" class="status-line" aria-live="polite"></p>
       <p id="libraryWarning" class="warn"></p>
@@ -178,25 +185,24 @@
     </section>
 
     <section class="card" aria-labelledby="playlistHeading">
-      <h2 id="playlistHeading">Playlist</h2>
-      <label class="check" for="playlistEnabledToggle">
-        <input id="playlistEnabledToggle" type="checkbox">
-        <span>Play a playlist from the web</span>
-      </label>
-      <p class="hint">A playlist replaces the folder while it has at least one entry.
-        If it cannot be reached, the TV falls back to the folder.</p>
-
-      <label for="playlistUrlInput">Playlist address</label>
+      <div class="card-head">
+        <h2 id="playlistHeading">Playlist</h2>
+        <label class="switch" for="playlistEnabledToggle">
+          <input id="playlistEnabledToggle" type="checkbox">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>Enabled</span>
+        </label>
+      </div>
+      <p class="hint">Replaces the local folder while it has entries; falls back to the folder when unreachable.</p>
+      <label for="playlistUrlInput">Playlist URL</label>
       <input id="playlistUrlInput" type="text" inputmode="url" autocomplete="off"
              placeholder="https://example.com/playlist.json">
-
-      <label for="playlistRefreshInput">Check it for changes every</label>
+      <label for="playlistRefreshInput">Refresh interval</label>
       <div class="inline-field">
         <input id="playlistRefreshInput" type="number" min="30" max="3600"
                inputmode="numeric" autocomplete="off">
-        <span>seconds</span>
+        <span>s</span>
       </div>
-
       <p id="mediaSourceState" class="status-line"></p>
       <p id="playlistError" class="error" aria-live="polite"></p>
       <div class="row">
@@ -204,13 +210,53 @@
         <span id="playlistSaved" class="saved" role="status" aria-live="polite"></span>
       </div>
     </section>
+  </section>
+
+  <!-- ================================================================ QMS -->
+  <section id="panel-qms" class="panel hidden" role="tabpanel" aria-labelledby="tab-qms" tabindex="0">
 
     <section class="card" aria-labelledby="queueHeading">
-      <h2 id="queueHeading">Queue board address</h2>
-      <label for="mediaQmsUrlInput">Address of the clinic board</label>
+      <h2 id="queueHeading">QMS URL</h2>
+      <label for="mediaQmsUrlInput">QMS page shown in the QMS view</label>
       <input id="mediaQmsUrlInput" type="text" inputmode="url" autocomplete="off"
-             placeholder="https://example.com/board">
-      <p class="hint">Leave it blank to use the Home URL.</p>
+             placeholder="https://example.com/qms">
+      <p class="hint">Leave blank to use the Home URL.</p>
+
+      <details class="advanced" id="advancedContent">
+        <summary>Selectors and call detection</summary>
+        <p class="hint">CSS selectors used to read calls from the QMS page. Leave blank to keep the saved value.</p>
+
+        <label for="mediaStripSelectorInput">Strip selector <span class="muted">(call card list)</span></label>
+        <input id="mediaStripSelectorInput" type="text" autocomplete="off"
+               placeholder="main &gt; div:nth-child(1)">
+
+        <label for="mediaNumberSelectorInput">Number selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaNumberSelectorInput" type="text" autocomplete="off"
+               placeholder="div:first-child &gt; span">
+
+        <label for="mediaLocationSelectorInput">Location selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaLocationSelectorInput" type="text" autocomplete="off"
+               placeholder="div:nth-child(2) &gt; span:first-child">
+
+        <label for="mediaTimeSelectorInput">Time selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaTimeSelectorInput" type="text" autocomplete="off"
+               placeholder="div:nth-child(2) &gt; span:nth-child(2)">
+
+        <label for="mediaCallSourceInput">Call source</label>
+        <select id="mediaCallSourceInput">
+          <option value="dom">DOM change (recommended)</option>
+          <option value="dom_or_audio">DOM change or chime</option>
+          <option value="audio">Chime only</option>
+        </select>
+
+        <label for="mediaUiScaleInput">QMS UI scale</label>
+        <div class="inline-field">
+          <input id="mediaUiScaleInput" type="number" min="80" max="200"
+                 inputmode="numeric" autocomplete="off">
+          <span>%</span>
+        </div>
+      </details>
+
       <p id="mediaError" class="error" aria-live="polite"></p>
       <div class="row">
         <button type="button" id="saveMedia" class="btn primary">Save</button>
@@ -218,64 +264,39 @@
       </div>
     </section>
 
-    <details class="card advanced" id="advancedContent">
-      <summary>Advanced &mdash; how the board is read</summary>
-      <p class="hint">Only change these if the TV cannot find the calls on the board.
-        Each answer is a CSS selector. Leave a field blank to keep the saved value.</p>
-
-      <label for="mediaStripSelectorInput">The column that holds the call cards</label>
-      <input id="mediaStripSelectorInput" type="text" autocomplete="off"
-             placeholder="main &gt; div:nth-child(1)">
-      <p class="hint">For example the list of everyone waiting.</p>
-
-      <label for="mediaNumberSelectorInput">The number inside a call card</label>
-      <input id="mediaNumberSelectorInput" type="text" autocomplete="off"
-             placeholder="div:first-child &gt; span">
-      <p class="hint">Counted from each card, not from the page.</p>
-
-      <label for="mediaLocationSelectorInput">The room or counter inside a call card</label>
-      <input id="mediaLocationSelectorInput" type="text" autocomplete="off"
-             placeholder="div:nth-child(2) &gt; span:first-child">
-      <p class="hint">Counted from each card, not from the page.</p>
-
-      <label for="mediaTimeSelectorInput">The call time inside a call card</label>
-      <input id="mediaTimeSelectorInput" type="text" autocomplete="off"
-             placeholder="div:nth-child(2) &gt; span:nth-child(2)">
-      <p class="hint">Counted from each card, not from the page.</p>
-
-      <label for="mediaCallSourceInput">How a call is detected</label>
-      <select id="mediaCallSourceInput">
-        <option value="dom">When the page changes (recommended)</option>
-        <option value="dom_or_audio">When the page changes or the chime plays</option>
-        <option value="audio">Only when the chime plays</option>
-      </select>
-
-      <label for="mediaUiScaleInput">Zoom of the board page</label>
-      <div class="inline-field">
-        <input id="mediaUiScaleInput" type="number" min="80" max="200"
-               inputmode="numeric" autocomplete="off">
-        <span>%</span>
+    <section class="card" aria-labelledby="browserHeading">
+      <h2 id="browserHeading">QMS view</h2>
+      <label for="urlInput">Open URL</label>
+      <input id="urlInput" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://example.com">
+      <div class="row">
+        <button type="button" id="openButton" class="btn primary grow">Open</button>
+        <button type="button" id="openHomeButton" class="btn grow">Open + set Home URL</button>
       </div>
-    </details>
+      <div class="row toolbar">
+        <button type="button" id="navBack" class="btn">Back</button>
+        <button type="button" id="navForward" class="btn">Forward</button>
+        <button type="button" id="navHome" class="btn">Home</button>
+        <button type="button" id="navReload" class="btn">Reload</button>
+        <button type="button" id="navStop" class="btn">Stop</button>
+      </div>
+    </section>
   </section>
 
   <!-- ============================================================ DISPLAY -->
   <section id="panel-display" class="panel hidden" role="tabpanel" aria-labelledby="tab-display" tabindex="0">
 
     <section class="card" aria-labelledby="bandsHeading">
-      <h2 id="bandsHeading">How the screen is split</h2>
-      <p class="hint">Used when the TV is in split screen. The three parts must add up to 100%.</p>
+      <h2 id="bandsHeading">Split layout</h2>
+      <p class="hint">Bands used in Split mode; they must total 100%.</p>
 
-      <label for="mediaSplitInput">Videos and images
-        <span class="range-value" id="splitValue">71%</span></label>
+      <label for="mediaSplitInput">Media band <span class="range-value" id="splitValue">71%</span></label>
       <input id="mediaSplitInput" type="range" min="55" max="85" step="1" value="71">
 
-      <label for="mediaHeaderInput">Top bar
-        <span class="range-value" id="headerValue">7%</span></label>
+      <label for="mediaHeaderInput">Header band <span class="range-value" id="headerValue">7%</span></label>
       <input id="mediaHeaderInput" type="range" min="3" max="15" step="1" value="7">
 
-      <label for="mediaStripInput">Queue board
-        <span class="range-value" id="stripValue">22%</span></label>
+      <label for="mediaStripInput">QMS strip <span class="range-value" id="stripValue">22%</span></label>
       <input id="mediaStripInput" type="range" min="18" max="40" step="1" value="22">
 
       <p id="bandTotalLine" class="band-total" role="status" aria-live="polite">Total 100%</p>
@@ -283,22 +304,19 @@
     </section>
 
     <section class="card" aria-labelledby="sizesHeading">
-      <h2 id="sizesHeading">Text sizes</h2>
-      <p class="hint">Sizes are for the reference 1080p screen and scale with the TV.</p>
+      <h2 id="sizesHeading">Text</h2>
+      <p class="hint">Pixel sizes at 1080p; they scale with the TV.</p>
 
-      <label for="mediaCurrentNumberPxInput">The number being called
-        <span class="range-value" id="currentNumberPxValue">&mdash;</span></label>
+      <label for="mediaCurrentNumberPxInput">Current number <span class="range-value" id="currentNumberPxValue">&mdash;</span></label>
       <input id="mediaCurrentNumberPxInput" type="range" min="48" max="160" step="1" value="96">
 
-      <label for="mediaHistoryNumberPxInput">Past numbers
-        <span class="range-value" id="historyNumberPxValue">&mdash;</span></label>
+      <label for="mediaHistoryNumberPxInput">History numbers <span class="range-value" id="historyNumberPxValue">&mdash;</span></label>
       <input id="mediaHistoryNumberPxInput" type="range" min="32" max="96" step="1" value="56">
 
-      <label for="mediaLabelPxInput">Labels
-        <span class="range-value" id="labelPxValue">&mdash;</span></label>
+      <label for="mediaLabelPxInput">Labels <span class="range-value" id="labelPxValue">&mdash;</span></label>
       <input id="mediaLabelPxInput" type="range" min="10" max="24" step="1" value="15">
 
-      <label for="mediaLanguageInput">Language of the on-screen labels</label>
+      <label for="mediaLanguageInput">UI language</label>
       <select id="mediaLanguageInput">
         <option value="ms">Bahasa Melayu</option>
         <option value="en">English</option>
@@ -308,52 +326,57 @@
     </section>
 
     <section class="card" aria-labelledby="callsHeading">
-      <h2 id="callsHeading">When a number is called</h2>
-      <label for="mediaDwellInput">Show the full board for</label>
-      <div class="inline-field">
-        <input id="mediaDwellInput" type="number" min="20" max="180"
-               inputmode="numeric" autocomplete="off">
-        <span>seconds</span>
+      <h2 id="callsHeading">Playback</h2>
+      <div class="grid2">
+        <div>
+          <label for="mediaDwellInput">QMS focus on call</label>
+          <div class="inline-field">
+            <input id="mediaDwellInput" type="number" min="20" max="180"
+                   inputmode="numeric" autocomplete="off">
+            <span>s</span>
+          </div>
+        </div>
+        <div>
+          <label for="mediaImageDurationInput">Image duration</label>
+          <div class="inline-field">
+            <input id="mediaImageDurationInput" type="number" min="3" max="120"
+                   inputmode="numeric" autocomplete="off">
+            <span>s</span>
+          </div>
+        </div>
+        <div>
+          <label for="mediaVolumeInput">Media volume</label>
+          <div class="inline-field">
+            <input id="mediaVolumeInput" type="number" min="0" max="100"
+                   inputmode="numeric" autocomplete="off">
+            <span>%</span>
+          </div>
+        </div>
       </div>
 
-      <h3 class="subhead">Stills and sound</h3>
-      <label for="mediaImageDurationInput">Seconds each image stays on screen</label>
-      <div class="inline-field">
-        <input id="mediaImageDurationInput" type="number" min="3" max="120"
-               inputmode="numeric" autocomplete="off">
-        <span>seconds</span>
-      </div>
-
-      <label for="mediaFillModeInput">How still images fill the screen</label>
+      <label for="mediaFillModeInput">Image fill mode</label>
       <select id="mediaFillModeInput">
-        <option value="letterboxBlur">Fit, with a blurred background (recommended)</option>
-        <option value="letterbox">Fit, with black bands</option>
-        <option value="cover">Fill the screen, cropping the edges</option>
+        <option value="letterboxBlur">Letterbox, blurred (recommended)</option>
+        <option value="letterbox">Letterbox, black</option>
+        <option value="cover">Cover (crop)</option>
       </select>
-
-      <label for="mediaVolumeInput">Media volume</label>
-      <div class="inline-field">
-        <input id="mediaVolumeInput" type="number" min="0" max="100"
-               inputmode="numeric" autocomplete="off">
-        <span>%</span>
-      </div>
 
       <p id="displayError" class="error" aria-live="polite"></p>
       <div class="row">
-        <button type="button" id="saveDisplaySettings" class="btn primary">Save</button>
+        <button type="button" id="saveDisplaySettings" class="btn primary">Save display settings</button>
         <span id="displaySaved" class="saved" role="status" aria-live="polite"></span>
       </div>
     </section>
   </section>
 
-  <!-- ============================================================= DEVICE -->
-  <section id="panel-device" class="panel hidden" role="tabpanel" aria-labelledby="tab-device" tabindex="0">
+  <!-- =========================================================== SETTINGS -->
+  <section id="panel-settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings" tabindex="0">
 
     <section class="card" aria-labelledby="nameHeading">
-      <h2 id="nameHeading">This device</h2>
+      <h2 id="nameHeading">Device</h2>
       <p id="deviceError" class="error" aria-live="polite"></p>
 
-      <label for="deviceNameInput">Name shown on the TV and the network</label>
+      <label for="deviceNameInput">Device name <span class="muted">(mDNS)</span></label>
       <div class="row">
         <input id="deviceNameInput" type="text" maxlength="40" class="grow" autocomplete="off">
         <button type="button" id="saveDeviceName" class="btn">Save</button>
@@ -365,7 +388,7 @@
         <input id="portInput" type="number" min="1024" max="65535" class="grow" autocomplete="off">
         <button type="button" id="savePort" class="btn">Save</button>
       </div>
-      <p class="hint">Changing the port moves this page to the new address.</p>
+      <p class="hint">This page moves to the new port.</p>
       <p id="portSaved" class="saved" role="status" aria-live="polite"></p>
 
       <label for="homeUrlInput">Home URL</label>
@@ -375,23 +398,23 @@
       </div>
       <p id="homeSaved" class="saved" role="status" aria-live="polite"></p>
 
-      <label class="check" for="fullscreenToggle">
+      <label class="switch" for="fullscreenToggle">
         <input id="fullscreenToggle" type="checkbox">
-        <span>Full screen</span>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Fullscreen</span>
       </label>
-      <label class="check" for="keepAwakeToggle">
+      <label class="switch" for="keepAwakeToggle">
         <input id="keepAwakeToggle" type="checkbox">
-        <span>Keep the screen awake</span>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Keep screen on</span>
       </label>
       <p id="displayToggleSaved" class="saved" role="status" aria-live="polite"></p>
     </section>
 
     <section class="card" aria-labelledby="networksHeading">
       <h2 id="networksHeading">Trusted networks</h2>
-      <p class="hint">Extra networks that may reach the pairing prompt. The PIN and
-        the pairing tokens still gate every control action, and an unpaired device
-        only ever sees the pairing screen.</p>
-      <label for="networkInput">Add a network (IPv4 address range, e.g. 10.10.1.0/24)</label>
+      <p class="hint">Extra subnets allowed to reach pairing. The PIN and pairing token still gate every action.</p>
+      <label for="networkInput">Add subnet (IPv4 CIDR)</label>
       <div class="row">
         <input id="networkInput" type="text" inputmode="text" class="grow"
                autocomplete="off" placeholder="10.10.1.0/24">
@@ -401,28 +424,10 @@
       <ul id="networkList" class="netlist"></ul>
     </section>
 
-    <section class="card" aria-labelledby="browserHeading">
-      <h2 id="browserHeading">TV browser</h2>
-      <label for="urlInput">Open a web page on the TV</label>
-      <input id="urlInput" type="text" inputmode="url" autocomplete="off"
-             placeholder="https://example.com">
-      <div class="row wrap">
-        <button type="button" id="openButton" class="btn primary">Open</button>
-        <button type="button" id="openHomeButton" class="btn">Open and set as Home</button>
-      </div>
-
-      <h3 class="subhead">Page controls</h3>
-      <div class="row wrap">
-        <button type="button" id="navBack" class="btn">Back</button>
-        <button type="button" id="navForward" class="btn">Forward</button>
-        <button type="button" id="navHome" class="btn">Home</button>
-        <button type="button" id="navReload" class="btn">Reload</button>
-        <button type="button" id="navStop" class="btn">Stop</button>
-      </div>
-
-      <h3 class="subhead">Repair</h3>
-      <div class="row wrap">
-        <button type="button" id="restartWebview" class="btn">Restart the TV browser</button>
+    <section class="card" aria-labelledby="repairHeading">
+      <h2 id="repairHeading">WebView</h2>
+      <div class="row toolbar">
+        <button type="button" id="restartWebview" class="btn">Restart WebView</button>
         <button type="button" id="clearCache" class="btn">Clear cache</button>
         <button type="button" id="clearSiteData" class="btn danger">Clear site data</button>
       </div>
@@ -430,51 +435,55 @@
     </section>
 
     <details class="card advanced" id="mqttCard">
-      <summary>Home automation (MQTT)</summary>
-      <p class="warn">Broker access equals control. Anyone who can publish to the
-        command topic can drive this TV &mdash; the controller token is not required
-        for MQTT commands. The broker credentials are the only gate. Leave MQTT
-        off unless you intend this.</p>
+      <summary>MQTT</summary>
+      <p class="warn">Broker access equals control: MQTT commands do not need the
+        controller token. The broker credentials are the only gate.</p>
       <p id="mqttState" class="status-line"></p>
-      <label class="check" for="mqttEnabledToggle">
+      <label class="switch" for="mqttEnabledToggle">
         <input id="mqttEnabledToggle" type="checkbox">
-        <span>Enable MQTT</span>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Enabled</span>
       </label>
-
-      <label for="mqttHostInput">Broker host</label>
-      <input id="mqttHostInput" type="text" autocomplete="off" placeholder="192.168.1.10">
-
-      <label for="mqttPortInput">Port</label>
-      <input id="mqttPortInput" type="number" min="1" max="65535" inputmode="numeric"
-             autocomplete="off">
-
-      <label class="check" for="mqttTlsToggle">
+      <div class="grid2">
+        <div>
+          <label for="mqttHostInput">Broker host</label>
+          <input id="mqttHostInput" type="text" autocomplete="off" placeholder="192.168.1.10">
+        </div>
+        <div>
+          <label for="mqttPortInput">Port</label>
+          <input id="mqttPortInput" type="number" min="1" max="65535" inputmode="numeric"
+                 autocomplete="off">
+        </div>
+      </div>
+      <label class="switch" for="mqttTlsToggle">
         <input id="mqttTlsToggle" type="checkbox">
-        <span>Use TLS</span>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>TLS</span>
       </label>
-
-      <label for="mqttUsernameInput">Username</label>
-      <input id="mqttUsernameInput" type="text" autocomplete="off">
-
-      <label for="mqttPasswordInput">Password</label>
-      <input id="mqttPasswordInput" type="password" autocomplete="new-password"
-             placeholder="leave blank to keep">
-
+      <div class="grid2">
+        <div>
+          <label for="mqttUsernameInput">Username</label>
+          <input id="mqttUsernameInput" type="text" autocomplete="off">
+        </div>
+        <div>
+          <label for="mqttPasswordInput">Password</label>
+          <input id="mqttPasswordInput" type="password" autocomplete="new-password"
+                 placeholder="unchanged">
+        </div>
+      </div>
       <label for="mqttBaseTopicInput">Base topic</label>
       <input id="mqttBaseTopicInput" type="text" autocomplete="off"
              placeholder="terebibro/&lt;device&gt;">
-
-      <label class="check" for="mqttDiscoveryToggle">
+      <label class="switch" for="mqttDiscoveryToggle">
         <input id="mqttDiscoveryToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
         <span>Home Assistant discovery</span>
       </label>
-
       <label for="mqttDiscoveryPrefixInput">Discovery prefix</label>
       <input id="mqttDiscoveryPrefixInput" type="text" autocomplete="off"
              placeholder="homeassistant">
-
       <p id="mqttError" class="error" aria-live="polite"></p>
-      <div class="row wrap">
+      <div class="row">
         <button type="button" id="saveMqtt" class="btn primary">Save</button>
         <button type="button" id="clearMqttPassword" class="btn danger">Clear password</button>
         <span id="mqttSaved" class="saved" role="status" aria-live="polite"></span>
@@ -484,24 +493,22 @@
     <details class="card advanced" id="diagnosticsCard">
       <summary>Diagnostics</summary>
       <p id="webViewWarning" class="warn hidden"></p>
-
-      <h3 class="subhead">The TV</h3>
+      <h3 class="subhead">Device</h3>
       <dl class="status-grid">
         <dt>Device name</dt><dd id="infoDeviceName"></dd>
         <dt>App version</dt><dd id="infoAppVersion"></dd>
-        <dt>Android version</dt><dd id="infoAndroidVersion"></dd>
+        <dt>Android</dt><dd id="infoAndroidVersion"></dd>
         <dt>SDK</dt><dd id="infoSdk"></dd>
         <dt>WebView</dt><dd id="infoWebView" class="break"></dd>
         <dt>IP address</dt><dd id="infoIp"></dd>
         <dt>Port</dt><dd id="infoPort"></dd>
-        <dt>Running for</dt><dd id="infoUptime"></dd>
+        <dt>Uptime</dt><dd id="infoUptime"></dd>
         <dt>MQTT</dt><dd id="infoMqtt"></dd>
-        <dt>Paired devices</dt><dd id="infoPaired"></dd>
+        <dt>Paired controllers</dt><dd id="infoPaired"></dd>
       </dl>
-
-      <h3 class="subhead">The page it is showing</h3>
+      <h3 class="subhead">QMS view</h3>
       <dl class="status-grid">
-        <dt>Address</dt><dd id="currentUrl" class="break"></dd>
+        <dt>URL</dt><dd id="currentUrl" class="break"></dd>
         <dt>Title</dt><dd id="currentTitle" class="break"></dd>
         <dt>Loading</dt><dd id="loadingText">no</dd>
         <dt>Network</dt><dd id="networkText">unknown</dd>
@@ -510,9 +517,8 @@
 
     <section class="card danger-zone" aria-labelledby="unpairHeading">
       <h2 id="unpairHeading">Unpair</h2>
-      <p class="hint">This device loses access to the TV. Pair again with the PIN
-        shown on the TV.</p>
-      <button type="button" id="unpairButton" class="btn danger">Unpair this device</button>
+      <p class="hint">This controller loses access. Pair again with the PIN on the TV.</p>
+      <button type="button" id="unpairButton" class="btn danger">Unpair this controller</button>
     </section>
   </section>
 

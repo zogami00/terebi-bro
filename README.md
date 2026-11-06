@@ -240,17 +240,18 @@ and stripped on arrival).
 ## Controller page
 
 The bundled controller is one self-hosted page (no CDN, no web fonts, no inline
-script or style: `script-src` and `style-src` are `'self'`). A fixed header shows
-the device name, an online/offline pill and the layout the TV is currently in
-plain words, plus one amber line when the queue board cannot be detected. All
-controls live in four tabs, with tab state kept in `sessionStorage`:
+script or style: `script-src` and `style-src` are `'self'`). A top bar shows the
+device name, an online/offline pill and the current media mode, plus one amber
+line when QMS detection fails. Controls live in five tabs (a bottom tab bar on a
+phone, a top tab bar on wider screens), with tab state kept in `sessionStorage`:
 
 | Tab | What it holds |
 | --- | --- |
-| **Now** | The current call and what is playing, the three layout buttons (queue board only / split screen / media only), Play/Pause and Next, the media web page, and the D-pad. |
-| **Content** | Videos and images (upload, list, preview, delete, reload), the HTTP playlist, the queue board address, and the detection selectors under **Advanced**. |
-| **Display** | The media/header/queue split as three sliders that must total 100 %, text sizes, signage language, call dwell, still-image duration and fill mode, volume. |
-| **Device** | Name, controller port, Home URL, fullscreen and keep-awake, trusted networks, the TV browser controls, MQTT, diagnostics and unpair. |
+| **Remote** | Now calling and what is playing, Media mode (QMS only / Split / Media only) and its Enabled switch, the D-pad with Back, Play/Pause and Next, and Text input (`POST /api/text`) for the media page. |
+| **Media** | Media URL (open now, open on start, default source), the Local folder (upload, list, preview, delete) and the Playlist. |
+| **QMS** | QMS URL with the strip/number/location/time selectors, call source and QMS UI scale; the QMS view (open URL, Back, Forward, Home, Reload, Stop). |
+| **Display** | Split layout (media band / header band / QMS strip, totalling 100 %), text sizes and UI language, QMS focus on call, image duration, media volume and image fill mode. |
+| **Settings** | Device name, controller port, Home URL, Fullscreen and Keep screen on, trusted networks, WebView restart/cache/site data, MQTT, diagnostics and unpair. |
 
 Each section saves only its own fields, so one invalid value never blocks an
 unrelated section. Destructive actions (delete a file, clear site data, unpair)
@@ -263,7 +264,7 @@ the MQTT actions do, through `POST /api/media/next`, `/api/media/play` and
 
 **Media mode is off by default.** With it off the app is V1 exactly: one
 fullscreen WebView, the same Back ladder, the same overlays and the same MQTT
-commands. Enable it from the controller's Now tab (or
+commands. Enable it from the controller's Remote tab (or
 `POST /api/settings/media {"mediaModeEnabled": true}`) and the TV can show a signage
 loop beside the queue dashboard.
 
@@ -332,8 +333,8 @@ call observed the strip keeps showing what it last showed, or the no-call label.
 best-effort on a WebView too old for document-start scripts, and a `<video>`
 used as a sound source is indistinguishable from programme audio.
 
-The QMS URL and the four detection selectors are set in the controller's Media
-card, under **Queue board**, and default to the reference dashboard's structure
+The QMS URL and the four detection selectors are set in the controller's QMS
+tab, and default to the reference dashboard's structure
 (see the settings table below). A blank QMS URL tracks the Home URL. Enabling
 media mode, or saving the settings, on a page that is already loaded reads that
 page immediately — a reload is not needed.
@@ -415,7 +416,7 @@ range, and whether it actually plays depends on the stream's codecs.
 
 The media band can also host a **web page** — a Jellyfin UI, a YouTube page,
 any `http`/`https` site — as a fourth source beside the folder, the playlist and
-an ad-hoc URL. It is opened from the controller's Now tab (**Show it now**),
+an ad-hoc URL. It is opened from the controller's Media tab (**Open now**),
 from the on-device menu (**Open web in media**), or with
 `POST /api/media/open {"url": "...", "web": true}`. Omitted or `false` keeps the
 native player path.
