@@ -140,6 +140,13 @@ class ApiRoutes(
         )
         put(Method.POST to "/api/media/mode", Route(Method.POST, true, setOf("mode"), handler = { _, _, v -> setMediaMode(v) }))
         put(Method.POST to "/api/media/open", Route(Method.POST, true, setOf("url", "web"), handler = { _, _, v -> mediaOpen(v) }))
+        // Playback control: the same ControllerHost methods the MQTT actions and
+        // the on-device menu use, so the controller needs no broker to pause or
+        // skip a clip. Each is a no-op reporting `applied:false` while media
+        // mode is off.
+        put(Method.POST to "/api/media/next", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> respond(host.mediaNext()) }))
+        put(Method.POST to "/api/media/play", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> respond(host.mediaPlay()) }))
+        put(Method.POST to "/api/media/pause", Route(Method.POST, true, emptySet(), handler = { _, _, _ -> respond(host.mediaPause()) }))
         // Forces a library re-read while the app is in the foreground. A push
         // that leaves the folder's mtime unchanged is otherwise invisible until
         // the next resume.

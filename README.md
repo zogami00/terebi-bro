@@ -237,11 +237,33 @@ navigated to the new origin after the rebind, carrying its token in the URL
 fragment (which is never sent to the server, and is moved into `localStorage`
 and stripped on arrival).
 
+## Controller page
+
+The bundled controller is one self-hosted page (no CDN, no web fonts, no inline
+script or style: `script-src` and `style-src` are `'self'`). A fixed header shows
+the device name, an online/offline pill and the layout the TV is currently in
+plain words, plus one amber line when the queue board cannot be detected. All
+controls live in four tabs, with tab state kept in `sessionStorage`:
+
+| Tab | What it holds |
+| --- | --- |
+| **Now** | The current call and what is playing, the three layout buttons (queue board only / split screen / media only), Play/Pause and Next, the media web page, and the D-pad. |
+| **Content** | Videos and images (upload, list, preview, delete, reload), the HTTP playlist, the queue board address, and the detection selectors under **Advanced**. |
+| **Display** | The media/header/queue split as three sliders that must total 100 %, text sizes, signage language, call dwell, still-image duration and fill mode, volume. |
+| **Device** | Name, controller port, Home URL, fullscreen and keep-awake, trusted networks, the TV browser controls, MQTT, diagnostics and unpair. |
+
+Each section saves only its own fields, so one invalid value never blocks an
+unrelated section. Destructive actions (delete a file, clear site data, unpair)
+ask for confirmation. Playback from the page uses the same controller methods
+the MQTT actions do, through `POST /api/media/next`, `/api/media/play` and
+`/api/media/pause`; with media mode off these return
+`{"applied":false,"reason":"media_disabled"}`.
+
 ## Media mode
 
 **Media mode is off by default.** With it off the app is V1 exactly: one
 fullscreen WebView, the same Back ladder, the same overlays and the same MQTT
-commands. Enable it from the controller's Media card (or
+commands. Enable it from the controller's Now tab (or
 `POST /api/settings/media {"mediaModeEnabled": true}`) and the TV can show a signage
 loop beside the queue dashboard.
 
@@ -328,11 +350,11 @@ There is no runtime permission, no SAF picker and no USB ritual; `adb push` into
 that folder works, and the folder is **rescanned on resume**, so a push while
 the app is in the foreground appears without a restart. The currently playing
 item is kept when it still exists. A push that does not change the folder's
-modification time is invisible to a plain resume, so the Library card's **Reload
-media** button (or `POST /api/media/rescan`) forces a re-read while the app
-stays in front. The button reports the queue size it saw; an empty `local · 0
-items` line next to the band's "media unavailable" notice means the folder
-really is empty, not that the scan was stale.
+modification time is invisible to a plain resume, so the Videos and images card's
+**Reload list** button (or `POST /api/media/rescan`) forces a re-read while the
+app stays in front. The button reports the queue size it saw; an empty
+`Folder on the TV · 0 items` line next to the band's "media unavailable" notice
+means the folder really is empty, not that the scan was stale.
 
 ### Uploading from the controller
 
@@ -393,7 +415,7 @@ range, and whether it actually plays depends on the stream's codecs.
 
 The media band can also host a **web page** — a Jellyfin UI, a YouTube page,
 any `http`/`https` site — as a fourth source beside the folder, the playlist and
-an ad-hoc URL. It is opened from the controller's Media card (**Open in media**),
+an ad-hoc URL. It is opened from the controller's Now tab (**Show it now**),
 from the on-device menu (**Open web in media**), or with
 `POST /api/media/open {"url": "...", "web": true}`. Omitted or `false` keeps the
 native player path.
@@ -410,10 +432,10 @@ native player path.
   parser rejects `type: "web"` entries, next/previous do nothing while a page is
   open, and the published `mediaSource` is `web` with a count of 0.
 - The band's **pause contract reaches the page**: an overlay, `QMS_FOCUS`,
-  `qms_only` or `POST /api/media/pause` (the MQTT action and the HA button use
-  it) pauses the page's media clock, and `mediaPaused` reflects what it is
-  doing. A page that is hidden because another source took the band stays
-  paused; it is not resumed on the next foregrounding.
+  `qms_only` or `POST /api/media/pause` (the MQTT action, the HA button and the
+  controller's Play/Pause use it) pauses the page's media clock, and
+  `mediaPaused` reflects what it is doing. A page that is hidden because another
+  source took the band stays paused; it is not resumed on the next foregrounding.
 - A page that **fails to load** (main-frame error or a dead renderer) is
   dropped: the error is published and the folder or playlist takes over, so
   clearing the web setting — or toggling media mode — is never needed to
