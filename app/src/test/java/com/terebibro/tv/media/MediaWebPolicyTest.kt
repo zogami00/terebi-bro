@@ -1,5 +1,6 @@
 package com.terebibro.tv.media
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,5 +79,16 @@ class MediaWebPolicyTest {
     fun `immersive mode stays off when fullscreen is disabled`() {
         assertFalse(MediaWebPolicy.shouldReapplyImmersive(fullscreenEnabled = false, imeVisible = false))
         assertFalse(MediaWebPolicy.shouldReapplyImmersive(fullscreenEnabled = false, imeVisible = true))
+    }
+
+    @Test
+    fun `media page gets protected media and nothing else`() {
+        val camera = "android.webkit.resource.VIDEO_CAPTURE"
+        val mic = "android.webkit.resource.AUDIO_CAPTURE"
+        assertEquals(
+            listOf(MediaWebPolicy.PROTECTED_MEDIA),
+            MediaWebPolicy.grantedResources(arrayOf(camera, MediaWebPolicy.PROTECTED_MEDIA, mic)).toList()
+        )
+        assertTrue(MediaWebPolicy.grantedResources(arrayOf(camera, mic)).isEmpty())
     }
 }

@@ -43,4 +43,16 @@ object MediaWebPolicy {
      */
     fun shouldReapplyImmersive(fullscreenEnabled: Boolean, imeVisible: Boolean): Boolean =
         fullscreenEnabled && !imeVisible
+
+    /** `PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID`, kept as a literal so this stays JVM-testable. */
+    const val PROTECTED_MEDIA = "android.webkit.resource.PROTECTED_MEDIA_ID"
+
+    /**
+     * The only permission a media page gets: protected media, which WebView
+     * requires before a page may use Widevine (DRM live TV such as RTMKlik
+     * fails with DRM_NO_KEY_SYSTEM without it). Camera, microphone and
+     * everything else stay denied. An empty result means deny.
+     */
+    fun grantedResources(requested: Array<String>): Array<String> =
+        requested.filter { it == PROTECTED_MEDIA }.toTypedArray()
 }

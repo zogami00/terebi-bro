@@ -293,13 +293,15 @@ class MediaWebSurface(
         // Cookies are accepted by default; the login persists for the process
         // lifetime without any extra configuration.
         web.webViewClient = HardenedWebViewClient()
-        // Parity with the QMS view: a signage page gets no camera, microphone
-        // or geolocation, and it cannot write arbitrary strings to logcat.
+        // Like the QMS view, a media page gets no camera, microphone or
+        // geolocation, and it cannot write arbitrary strings to logcat. The one
+        // exception is protected media (DRM), see MediaWebPolicy.
         // HTML5 fullscreen is delegated to the Activity; the media band owns
         // the view so it must not use the QMS path.
         web.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
-                request.deny()
+                val granted = MediaWebPolicy.grantedResources(request.resources)
+                if (granted.isEmpty()) request.deny() else request.grant(granted)
             }
 
             override fun onConsoleMessage(message: ConsoleMessage): Boolean = true
