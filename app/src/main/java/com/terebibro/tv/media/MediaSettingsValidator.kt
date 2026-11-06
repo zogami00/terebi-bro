@@ -57,6 +57,12 @@ object MediaSettingsValidator {
         val locationSelector = (update.qmsLocationSelector ?: current.qmsLocationSelector).trim()
         val timeSelector = (update.qmsTimeSelector ?: current.qmsTimeSelector).trim()
         val playlistUrl = (update.playlistUrl ?: current.playlistUrl).trim()
+        // A trailing slash is dropped so "/storage/X/" and "/storage/X" are one setting.
+        val localFolder = (update.mediaLocalFolder ?: current.mediaLocalFolder).trim()
+            .let { if (it.length > 1) it.trimEnd('/') else it }
+        if (!MediaFolders.isValidSetting(localFolder)) {
+            return Result.Invalid("mediaLocalFolder", "mediaLocalFolder must be blank or an absolute folder path")
+        }
         // A blank web URL keeps the stored value, the same semantics the MQTT
         // password uses: `GET /api/settings/media` only ever returns the masked
         // URL, so an untouched field must not overwrite the real one. There is
@@ -196,6 +202,7 @@ object MediaSettingsValidator {
                 historyCardMaxPx = historyCardMaxPx,
                 uiLanguage = uiLanguage,
                 mediaLocalEnabled = update.mediaLocalEnabled ?: current.mediaLocalEnabled,
+                mediaLocalFolder = localFolder,
                 playlistEnabled = playlistEnabled(update, current),
                 playlistUrl = normalisedPlaylistUrl,
                 playlistRefreshSec = playlistRefreshSec,

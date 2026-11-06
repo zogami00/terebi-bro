@@ -2,6 +2,8 @@ package com.terebibro.tv.media
 
 import android.os.Handler
 import android.os.Looper
+import com.terebibro.tv.BuildConfig
+import com.terebibro.tv.util.SafeLog
 import com.terebibro.tv.web.UrlValidator
 import org.json.JSONArray
 import org.json.JSONObject
@@ -159,6 +161,13 @@ class MediaController(
     private var qmsLocation = ""
     private var qmsLastCallAtMs = 0L
 
+    /**
+     * Debug-only: the token that explains the current mode, so a `qms_focus`
+     * reached by a call is distinguishable from an operator's manual choice.
+     * One of `call`, `manual`, `boot` or `default`.
+     */
+    private var modeViaToken = "default"
+
     private val paused: Boolean
         get() = state.enabled && MediaPausePolicy.shouldPause(
             mode = state.mode,
@@ -201,6 +210,9 @@ class MediaController(
         val wasPaused = paused
         dispatch(MediaEvent.DwellElapsed)
         applyPause(wasPaused)
+        if (previous == MediaMode.QMS_FOCUS) {
+            debugLog { "qms dwell expiry remaining=0s mode=${state.mode.wire}" }
+        }
         if (state.mode != previous) onChanged()
     }
 
@@ -235,11 +247,21 @@ class MediaController(
             // container resolved but has no cards yet) and `missing` (the
             // selectors did not resolve at all). An empty list is healthy: the
             // board is simply awaiting the first call of the day.
-            QmsSignalKind.PROBE -> onQmsProbe(clean == "ok" || clean == "empty")
-            QmsSignalKind.READY -> Unit
+            QmsSignalKind.PROBE -> {
+                val matched = clean == "ok" || clean == "empty"
+                onQmsProbe(matched)
+                debugLog {
+                    "qms probe matched=${probeToken(clean)} " +
+                        "qmsMatched=${state.qmsMatched} healthy=${state.qmsDetectionHealthy}"
+                }
+            }
+            QmsSignalKind.READY -> debugLog { "qms signal=ready" }
             // The chime is the optional second signal. It never carries a
             // number; see [onQmsAudio]. Page Visibility remains unused.
-            QmsSignalKind.AUDIO -> onQmsAudio()
+            QmsSignalKind.AUDIO -> {
+                onQmsAudio()
+                debugLog { "qms signal=audio mode=${state.mode.wire}" }
+            }
             QmsSignalKind.VISIBILITY -> Unit
         }
     }
@@ -290,6 +312,7 @@ class MediaController(
         val location = parts.getOrNull(1).orEmpty()
         val time = parts.getOrNull(2).orEmpty()
         if (number.isBlank()) return
+        debugLog { "qms signal=now number=$number location=$location time=$time" }
 
         val displayChanged = number != qmsNow || location != qmsLocation
         // The published values are the page's own strings, verbatim.
@@ -299,13 +322,22 @@ class MediaController(
         val key = QmsCallKey.from(number, location, time)
         // The first observation only seeds `lastKey`: a cold start with a stale
         // head card must not take the screen (see QmsCallKey.isNewCall).
-        val newCall = QmsCallKey.isNewCall(lastKey, key)
+        val previousKey = lastKey
+        val newCall = QmsCallKey.isNewCall(previousKey, key)
         lastKey = key
+        debugLog {
+            "qms call prev=${previousKey?.composite() ?: "-"} now=${key.composite()} " +
+                "newCall=$newCall"
+        }
 
         // Reading a complete card is itself proof that the selectors resolve.
         if (!state.qmsDetectionHealthy || !state.qmsMatched) {
             val before = state.mode
             dispatch(MediaEvent.QmsProbe(true))
+            debugLog {
+                "qms probe matched=ok qmsMatched=${state.qmsMatched} " +
+                    "healthy=${state.qmsDetectionHealthy}"
+            }
             if (state.mode == before && state.mode == MediaMode.SPLIT) applyStrip()
         }
 
@@ -321,10 +353,15 @@ class MediaController(
     }
 
     private fun onQmsProbe(matched: Boolean) {
-        val previousMode = state.mode
+        val previous = state
         dispatch(MediaEvent.QmsProbe(matched))
-        if (state.mode == previousMode && state.mode == MediaMode.SPLIT) applyStrip()
-        onChanged()
+        if (state.mode == previous.mode && state.mode == MediaMode.SPLIT) applyStrip()
+        // The page's fallback interval re-posts the probe once a second so a
+        // transition dropped by the signal clamp is not lost. A probe that
+        // changes nothing must not notify the host: the notification re-applies
+        // the media layout, which requests focus and resets the media page's
+        // DOM selection on every tick.
+        if (state != previous) onChanged()
     }
 
     private fun resetDetection() {
@@ -661,6 +698,13 @@ class MediaController(
     )
 
     fun currentMode(): MediaMode = state.mode
+
+    /**
+     * Debug-only explanation of how the current mode was entered, so the
+     * layout log can tell a call-driven `qms_focus` from a manual one. One of
+     * `call`, `manual`, `boot` or `default`.
+     */
+    fun modeVia(): String = modeViaToken
 
     fun manualUntilMs(): Long = state.manualUntilMs
 
@@ -1185,7 +1229,9 @@ class MediaController(
     private fun dispatch(event: MediaEvent) {
         val previousMode = state.mode
         val wasPaused = paused
-        state = MediaStateMachine.reduce(state, event, cfg, System.currentTimeMillis())
+        val previousDwell = state.dwellUntilMs
+        val nowMs = System.currentTimeMillis()
+        state = MediaStateMachine.reduce(state, event, cfg, nowMs)
         // Any transition into or out of a media-owning mode changes whether
         // playback may run; keep the player in step even for the reducer's own
         // transient modes. `Enabled` is handled by syncSettings/stopPlayback.
@@ -1193,9 +1239,39 @@ class MediaController(
             applyPause(wasPaused)
         }
         if (state.mode != previousMode) {
+            modeViaToken = when {
+                event is MediaEvent.Call -> "call"
+                event is MediaEvent.Manual -> "manual"
+                event is MediaEvent.Enabled && event.enabled -> "boot"
+                else -> "default"
+            }
             applyModeEffects()
         }
+        logDwell(previousDwell, nowMs)
         scheduleTimers()
+    }
+
+    /**
+     * Debug-only arm/re-arm line for the call dwell. The expiry itself is
+     * logged by [dwellExpiry]; a cleared dwell is not a new phase here.
+     */
+    private fun logDwell(previousDwellMs: Long, nowMs: Long) {
+        val dwellUntilMs = state.dwellUntilMs
+        if (dwellUntilMs <= 0L || dwellUntilMs == previousDwellMs) return
+        val remainingSec = ((dwellUntilMs - nowMs) / 1000L).coerceAtLeast(0L)
+        val action = if (previousDwellMs > 0L) "re-arm" else "arm"
+        debugLog { "qms dwell $action remaining=${remainingSec}s mode=${state.mode.wire}" }
+    }
+
+    /** Debug-only, redacted, single-line output; a no-op in a release build. */
+    private inline fun debugLog(message: () -> String) {
+        if (BuildConfig.DEBUG) SafeLog.d(LOG_TAG, message())
+    }
+
+    /** The probe value as one of the three known tokens, never page text. */
+    private fun probeToken(value: String): String = when (value) {
+        "ok", "empty", "missing" -> value
+        else -> "missing"
     }
 
     /**
@@ -1352,6 +1428,9 @@ class MediaController(
     }
 
     private companion object {
+        /** Debug-only QMS detection tag; SafeLog prefixes it with the app tag. */
+        const val LOG_TAG = "Qms"
+
         const val SOURCE_LOCAL = "local"
         const val SOURCE_PLAYLIST = "playlist"
         const val SOURCE_URL = "url"

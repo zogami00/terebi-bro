@@ -42,6 +42,12 @@ interface ControllerHost {
 
     fun dpad(key: String): ApiResult
 
+    /**
+     * Replaces the text in the focused text box of the media page, then
+     * presses Enter when [submit] is true. Only while that page owns the keys.
+     */
+    fun typeText(text: String, submit: Boolean): ApiResult
+
     fun setDeviceName(name: String): ApiResult
 
     fun setControllerPort(port: Int): ApiResult
@@ -88,6 +94,12 @@ interface ControllerHost {
      * exists; an unrelated change never restarts it.
      */
     fun onMediaLibraryChanged()
+
+    /**
+     * One level of the folder browser for `mediaLocalFolder`: the storage roots,
+     * and for a non-blank [path] its subfolders and playable-file count.
+     */
+    fun mediaFolders(path: String): ApiResult
 
     /** The dp metrics the layout is authored against. */
     fun screenMetrics(): ScreenMetrics

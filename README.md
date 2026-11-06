@@ -237,11 +237,34 @@ navigated to the new origin after the rebind, carrying its token in the URL
 fragment (which is never sent to the server, and is moved into `localStorage`
 and stripped on arrival).
 
+## Controller page
+
+The bundled controller is one self-hosted page (no CDN, no web fonts, no inline
+script or style: `script-src` and `style-src` are `'self'`). A top bar shows the
+device name, an online/offline pill and the current media mode, plus one amber
+line when QMS detection fails. Controls live in five tabs (a bottom tab bar on a
+phone, a top tab bar on wider screens), with tab state kept in `sessionStorage`:
+
+| Tab | What it holds |
+| --- | --- |
+| **Remote** | Now calling and what is playing, Media mode (QMS only / Split / Media only) and its Enabled switch, the D-pad with Back, Play/Pause and Next, and Text input (`POST /api/text`) for the media page. |
+| **Media** | Media URL (open now, open on start, default source), the Local folder (**Play from**: app storage or a folder picked on the TV's storage or a USB/SD drive; upload, list, preview, delete) and the Playlist. |
+| **QMS** | QMS URL with the strip/number/location/time selectors, call source and QMS UI scale; the QMS view (open URL, Back, Forward, Home, Reload, Stop). |
+| **Display** | Split layout (media band / header band / QMS strip, totalling 100 %), text sizes and UI language, QMS focus on call, image duration, media volume and image fill mode. |
+| **Settings** | Device name, controller port, Home URL, Fullscreen and Keep screen on, trusted networks, WebView restart/cache/site data, MQTT, diagnostics and unpair. |
+
+Each section saves only its own fields, so one invalid value never blocks an
+unrelated section. Destructive actions (delete a file, clear site data, unpair)
+ask for confirmation. Playback from the page uses the same controller methods
+the MQTT actions do, through `POST /api/media/next`, `/api/media/play` and
+`/api/media/pause`; with media mode off these return
+`{"applied":false,"reason":"media_disabled"}`.
+
 ## Media mode
 
 **Media mode is off by default.** With it off the app is V1 exactly: one
 fullscreen WebView, the same Back ladder, the same overlays and the same MQTT
-commands. Enable it from the controller's Media card (or
+commands. Enable it from the controller's Remote tab (or
 `POST /api/settings/media {"mediaModeEnabled": true}`) and the TV can show a signage
 loop beside the queue dashboard.
 
@@ -310,8 +333,8 @@ call observed the strip keeps showing what it last showed, or the no-call label.
 best-effort on a WebView too old for document-start scripts, and a `<video>`
 used as a sound source is indistinguishable from programme audio.
 
-The QMS URL and the four detection selectors are set in the controller's Media
-card, under **Queue board**, and default to the reference dashboard's structure
+The QMS URL and the four detection selectors are set in the controller's QMS
+tab, and default to the reference dashboard's structure
 (see the settings table below). A blank QMS URL tracks the Home URL. Enabling
 media mode, or saving the settings, on a page that is already loaded reads that
 page immediately — a reload is not needed.
@@ -328,11 +351,11 @@ There is no runtime permission, no SAF picker and no USB ritual; `adb push` into
 that folder works, and the folder is **rescanned on resume**, so a push while
 the app is in the foreground appears without a restart. The currently playing
 item is kept when it still exists. A push that does not change the folder's
-modification time is invisible to a plain resume, so the Library card's **Reload
-media** button (or `POST /api/media/rescan`) forces a re-read while the app
-stays in front. The button reports the queue size it saw; an empty `local · 0
-items` line next to the band's "media unavailable" notice means the folder
-really is empty, not that the scan was stale.
+modification time is invisible to a plain resume, so the Videos and images card's
+**Reload list** button (or `POST /api/media/rescan`) forces a re-read while the
+app stays in front. The button reports the queue size it saw; an empty
+`Folder on the TV · 0 items` line next to the band's "media unavailable" notice
+means the folder really is empty, not that the scan was stale.
 
 ### Uploading from the controller
 
@@ -389,11 +412,23 @@ An **`.m3u8` (HLS) URL** can be used directly in the playlist or in "Play from
 URL": it is handed to the platform `MediaPlayer`, which handles HLS on this
 range, and whether it actually plays depends on the stream's codecs.
 
+### Playing a folder from the TV or a USB drive
+
+The local source plays app storage (uploads) by default. **Media → Local folder →
+Choose folder…** browses the TV's internal shared storage and every mounted USB
+or SD volume, one level at a time (`POST /api/media/folders {"path": ""}` returns
+the roots), and **Play this folder** saves it as `mediaLocalFolder`. Android TV
+has no system folder picker, so the controller is the picker. The first browse
+shows Android's "access photos and videos" prompt on the TV (`READ_MEDIA_VIDEO`
+/ `READ_MEDIA_IMAGES`, or `READ_EXTERNAL_STORAGE` before Android 13). Only files
+directly in the folder play. Plugging or unplugging a drive re-reads the folder;
+while it is missing the local source is empty. Uploads always go to app storage.
+
 ### Web pages in the media band
 
 The media band can also host a **web page** — a Jellyfin UI, a YouTube page,
 any `http`/`https` site — as a fourth source beside the folder, the playlist and
-an ad-hoc URL. It is opened from the controller's Media card (**Open in media**),
+an ad-hoc URL. It is opened from the controller's Media tab (**Open now**),
 from the on-device menu (**Open web in media**), or with
 `POST /api/media/open {"url": "...", "web": true}`. Omitted or `false` keeps the
 native player path.
@@ -410,10 +445,10 @@ native player path.
   parser rejects `type: "web"` entries, next/previous do nothing while a page is
   open, and the published `mediaSource` is `web` with a count of 0.
 - The band's **pause contract reaches the page**: an overlay, `QMS_FOCUS`,
-  `qms_only` or `POST /api/media/pause` (the MQTT action and the HA button use
-  it) pauses the page's media clock, and `mediaPaused` reflects what it is
-  doing. A page that is hidden because another source took the band stays
-  paused; it is not resumed on the next foregrounding.
+  `qms_only` or `POST /api/media/pause` (the MQTT action, the HA button and the
+  controller's Play/Pause use it) pauses the page's media clock, and
+  `mediaPaused` reflects what it is doing. A page that is hidden because another
+  source took the band stays paused; it is not resumed on the next foregrounding.
 - A page that **fails to load** (main-frame error or a dead renderer) is
   dropped: the error is published and the folder or playlist takes over, so
   clearing the web setting — or toggling media mode — is never needed to
@@ -427,7 +462,31 @@ native player path.
   the convention `/api/settings/mqtt` follows for `mqttPasswordSet`.
 - The **D-pad only reaches the page in `media_only`**. In `split` the media
   WebView is not focusable, so the remote keeps driving the QMS page; switch to
-  `media_only` to navigate the page.
+  `media_only` to navigate the page. The decision is made once, in the pure
+  `MediaKeyRoute.route(key, mode, webActive, overlayVisible)` predicate, and both
+  the hardware remote and `POST /api/dpad` use it — the controller's on-screen
+  D-pad used to call the QMS view directly and kept navigating the hidden QMS
+  page. In `media_only` with a web page and no overlay the activity hands every
+  `DPAD`/`ENTER` press and release straight to the page's `WebView` instead of
+  relying on window focus, because a device was observed reporting focus on the
+  page while the page still never received the key. The event is consumed even
+  if the page ignores it, so it cannot fall through to the hidden QMS page; a
+  guard refuses and logs once if a synthetic key would ever reach the QMS view
+  in that state. `back` from `/api/dpad` still takes the normal `onRemoteBack()`
+  ladder. The same routing keeps working while the page's own HTML5 fullscreen
+  view covers the band: the keys still go to the page's `WebView` behind that
+  view.
+- The **QMS surface is genuinely gone in `media_only`**, not merely covered.
+  `webview_container` is `GONE` and the QMS page itself is `GONE`, so it can
+  neither take a key nor keep the Split band's height; the layout pass asserts
+  that invariant every time it runs (a violation is repaired and logged, never
+  thrown). The band's page re-applies its `MATCH_PARENT` `LayoutParams` on every
+  mode change, and is re-focused after that pass (with a posted second request),
+  because a page created while the container was the Split band otherwise keeps
+  the old bounds and the old focus. A debug-only `media layout …` line records
+  the mode, `webview_container` visibility, the page's visibility and height,
+  and the focused view after each pass, which is how the fix is confirmed on the
+  device.
 - **HTML5 fullscreen is band-scoped.** A YouTube/Jellyfin fullscreen request is
   honoured by adding the page's own fullscreen view inside the media band
   (`media_container`), above the page, with a black background; the page is
@@ -970,6 +1029,18 @@ strings/fragments, masks token/PIN/secret/cookie/authorization key-value pairs,
 and redacts bearer credentials. Tokens, their hashes, the PIN, `/api/pair`
 bodies and WebSocket `auth` messages are never logged.
 
+In a **debug** build the QMS detection path emits extra short, single-line
+diagnostics under the `TerebiBro/Qms` tag (`BuildConfig.DEBUG`; absent from a
+release build): one line per accepted signal (`qms signal=now|probe|ready|audio`,
+with the queue-number key parts for `now`), the probe result plus the resulting
+`qmsMatched`/`healthy` flags, the call-key comparison
+(`qms call prev=… now=… newCall=…`), the dwell arm/re-arm/expiry with the
+remaining seconds, and the existing `media layout mode=… via=call|manual|boot|default`
+line. The `media layout` line is emitted only when a pass actually changes the
+mode, the band geometry or a surface's visibility — not on the page's
+one-second probe heartbeat. They carry no URLs or credentials — the `now`
+values are queue numbers.
+
 ## Documentation
 
 - `docs/implementation-plan.md` — the original implementation plan (verbatim).
@@ -1057,7 +1128,7 @@ real-hardware behaviour remains unverified.
 
 V2 is validated **at the JVM and build level only**:
 
-- `testDebugUnitTest` passes: **591 JVM tests, 0 failures, 1 skipped** (a symlink
+- `testDebugUnitTest` passes: **600 JVM tests, 0 failures, 1 skipped** (a symlink
   test skipped on Windows). This includes the media reducer and layout, the
   settings validator, the QMS call key, signal clamp and injected-script
   escaping, the media queue and playlist parser, the upload rules, the media

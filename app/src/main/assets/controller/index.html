@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
 <title>Terebi Bro controller</title>
@@ -11,321 +12,532 @@
 <body>
 
 <header class="topbar">
-  <h1>Terebi Bro</h1>
-  <div class="statusline">
-    <span id="statusDot" class="dot offline"></span>
-    <span id="statusText">Offline</span>
-    <span id="statusDevice" class="muted"></span>
+  <div class="topbar-inner">
+    <div class="brand">
+      <h1 class="device-name"><span id="statusDevice">Terebi Bro</span></h1>
+      <p class="mode-line">Mode <strong id="headerMode">&mdash;</strong></p>
+    </div>
+    <p class="pill">
+      <span id="statusDot" class="dot offline" aria-hidden="true"></span>
+      <span id="statusText">Offline</span>
+    </p>
   </div>
+  <p id="qmsWarning" class="header-warn hidden">
+    <a id="qmsWarningLink" href="#panel-qms">QMS not detected &mdash; check the QMS URL and selectors</a>
+  </p>
 </header>
 
-<div id="errorBanner" class="banner hidden"></div>
+<nav id="tabbar" class="tabbar hidden" role="tablist" aria-label="Controller sections">
+  <button type="button" id="tab-remote" class="tab" role="tab" aria-selected="true"
+          aria-controls="panel-remote" data-tab="remote" tabindex="0">
+    <span class="tab-icon" aria-hidden="true">&#9673;</span>Remote</button>
+  <button type="button" id="tab-media" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-media" data-tab="media" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9654;</span>Media</button>
+  <button type="button" id="tab-qms" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-qms" data-tab="qms" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">#</span>QMS</button>
+  <button type="button" id="tab-display" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-display" data-tab="display" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9636;</span>Display</button>
+  <button type="button" id="tab-settings" class="tab" role="tab" aria-selected="false"
+          aria-controls="panel-settings" data-tab="settings" tabindex="-1">
+    <span class="tab-icon" aria-hidden="true">&#9881;</span>Settings</button>
+</nav>
+
+<div id="errorBanner" class="banner hidden" role="alert"></div>
 
 <!-- Pairing -->
-<section id="pairingScreen" class="card hidden">
-  <h2>Pair this device</h2>
-  <p class="muted">Enter the pairing PIN shown on the TV.</p>
-  <label for="pairPin">PIN</label>
+<section id="pairingScreen" class="pairing card hidden" aria-labelledby="pairHeading">
+  <h2 id="pairHeading">Pair controller</h2>
+  <p class="muted">Enter the pairing PIN shown on the TV (Menu &rarr; Settings).</p>
+  <label for="pairPin">Pairing PIN</label>
   <input id="pairPin" type="tel" inputmode="numeric" maxlength="6" autocomplete="off">
-  <label for="pairName">Device name</label>
+  <label for="pairName">Controller name</label>
   <input id="pairName" type="text" maxlength="40" autocomplete="off">
-  <button id="pairButton" class="primary">Pair</button>
-  <p id="pairError" class="error"></p>
+  <button id="pairButton" class="btn primary block" type="button">Pair</button>
+  <p id="pairError" class="error" aria-live="polite"></p>
 </section>
 
-<!-- Main -->
 <main id="mainScreen" class="hidden">
 
-  <section class="card">
-    <h2>Status</h2>
-    <dl class="status-grid">
-      <dt>Current URL</dt><dd id="currentUrl" class="break"></dd>
-      <dt>Title</dt><dd id="currentTitle" class="break"></dd>
-      <dt>Loading</dt><dd id="loadingText">no</dd>
-      <dt>Network</dt><dd id="networkText">unknown</dd>
-    </dl>
+  <!-- ============================================================= REMOTE -->
+  <section id="panel-remote" class="panel" role="tabpanel" aria-labelledby="tab-remote" tabindex="0">
+
+    <section class="card now" aria-labelledby="nowHeading">
+      <h2 id="nowHeading" class="sr-only">Now</h2>
+      <div class="now-call">
+        <p class="eyebrow">Now calling</p>
+        <p id="nowNumber" class="call-number">Nothing called yet</p>
+        <p id="nowLocation" class="call-location"></p>
+      </div>
+      <dl class="facts">
+        <dt>Playing</dt><dd id="nowMedia">&mdash;</dd>
+        <dt>Source</dt><dd id="nowSource">&mdash;</dd>
+      </dl>
+      <p id="nowMediaError" class="error hidden" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="modeHeading">
+      <div class="card-head">
+        <h2 id="modeHeading">Media mode</h2>
+        <label class="switch" for="mediaEnabledToggle">
+          <input id="mediaEnabledToggle" type="checkbox">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>Enabled</span>
+        </label>
+      </div>
+      <div class="segmented" role="group" aria-label="Media mode">
+        <button type="button" id="mediaModeQms" class="mode-btn" aria-pressed="false">
+          <span class="mode-title">QMS only</span>
+          <span class="mode-sub">Full screen</span>
+        </button>
+        <button type="button" id="mediaModeSplit" class="mode-btn" aria-pressed="false">
+          <span class="mode-title">Split</span>
+          <span class="mode-sub">Media + strip</span>
+        </button>
+        <button type="button" id="mediaModeMedia" class="mode-btn" aria-pressed="false">
+          <span class="mode-title">Media only</span>
+          <span class="mode-sub">Full screen</span>
+        </button>
+      </div>
+      <p id="mediaModeState" class="hidden"></p>
+      <p id="modeError" class="error" aria-live="polite"></p>
+    </section>
+
+    <section class="card tall" aria-labelledby="remoteHeading">
+      <h2 id="remoteHeading">D-pad</h2>
+      <div class="dpad" role="group" aria-label="D-pad">
+        <button type="button" id="dpadUp" class="dpad-btn up" aria-label="Up">&#9650;</button>
+        <button type="button" id="dpadLeft" class="dpad-btn left" aria-label="Left">&#9664;</button>
+        <button type="button" id="dpadOk" class="dpad-btn ok" aria-label="OK">OK</button>
+        <button type="button" id="dpadRight" class="dpad-btn right" aria-label="Right">&#9654;</button>
+        <button type="button" id="dpadDown" class="dpad-btn down" aria-label="Down">&#9660;</button>
+      </div>
+      <div class="row">
+        <button type="button" id="dpadBack" class="btn grow">Back</button>
+        <button type="button" id="mediaPlayPause" class="btn grow">Pause</button>
+        <button type="button" id="mediaNext" class="btn grow">Next</button>
+      </div>
+      <p class="hint">In Media only mode on a web page, hold OK on the TV remote to toggle the pointer.</p>
+    </section>
+
+    <section class="card" aria-labelledby="typeHeading">
+      <h2 id="typeHeading">Text input</h2>
+      <label for="typeInput">Replaces the text in the focused text field on the media page</label>
+      <input id="typeInput" type="text" autocomplete="off" enterkeyhint="send"
+             maxlength="500" placeholder="Search or text">
+      <div class="row">
+        <button type="button" id="typeButton" class="btn grow">Send</button>
+        <button type="button" id="typeEnterButton" class="btn primary grow">Send + Enter</button>
+      </div>
+    </section>
   </section>
 
-  <section class="card">
-    <h2>Open URL</h2>
-    <label for="urlInput">URL</label>
-    <input id="urlInput" type="text" inputmode="url" autocomplete="off" placeholder="https://example.com">
-    <div class="row">
-      <button id="openButton" class="primary">Open</button>
-      <button id="openHomeButton">Open + Set Home</button>
-    </div>
+  <!-- ============================================================== MEDIA -->
+  <section id="panel-media" class="panel hidden" role="tabpanel" aria-labelledby="tab-media" tabindex="0">
+
+    <section class="card" aria-labelledby="webHeading">
+      <h2 id="webHeading">Media URL</h2>
+      <label for="mediaWebUrlInput">Web page shown in the media band</label>
+      <input id="mediaWebUrlInput" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://jellyfin.example.com/web">
+      <p class="hint">Leave blank to keep the saved Media URL.</p>
+      <div class="row">
+        <button type="button" id="openMediaWeb" class="btn grow">Open now</button>
+      </div>
+      <p id="mediaWebError" class="error" aria-live="polite"></p>
+      <label class="switch" for="mediaWebEnabledToggle">
+        <input id="mediaWebEnabledToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Open Media URL on start</span>
+      </label>
+      <label for="mediaSourceDefaultInput">Default source</label>
+      <select id="mediaSourceDefaultInput">
+        <option value="local">Local folder</option>
+        <option value="playlist">Playlist</option>
+        <option value="web">Media URL</option>
+      </select>
+      <div class="row">
+        <button type="button" id="saveMediaWeb" class="btn primary">Save</button>
+        <span id="mediaWebSaved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="libraryHeading">
+      <h2 id="libraryHeading">Local folder</h2>
+      <label>Play from</label>
+      <p id="localFolderPath" class="folder-path">App storage (uploads)</p>
+      <div class="row">
+        <button type="button" id="browseFolderButton" class="btn grow">Choose folder&hellip;</button>
+        <button type="button" id="useAppStorageButton" class="btn grow">Use app storage</button>
+      </div>
+      <div id="folderBrowser" class="folder-browser hidden">
+        <p id="folderBrowserPath" class="folder-path"></p>
+        <ul id="folderList" class="netlist"></ul>
+        <div class="row">
+          <button type="button" id="folderUseButton" class="btn primary grow">Play this folder</button>
+          <button type="button" id="folderCloseButton" class="btn">Cancel</button>
+        </div>
+      </div>
+      <p id="localFolderError" class="error" aria-live="polite"></p>
+      <span id="localFolderSaved" class="saved" role="status" aria-live="polite"></span>
+
+      <h3 class="subhead">App storage uploads</h3>
+      <p id="librarySummary" class="muted">No files yet &mdash; upload one.</p>
+      <label class="drop" for="libraryFileInput" id="uploadDrop">
+        <span class="drop-title">Choose files</span>
+        <span class="drop-sub">Drop or tap to pick &middot; MP4, JPG, PNG</span>
+        <input id="libraryFileInput" type="file"
+               accept="video/mp4,image/jpeg,image/png" multiple>
+      </label>
+      <div class="row">
+        <button type="button" id="uploadButton" class="btn primary grow">Upload</button>
+        <button type="button" id="libraryReloadButton" class="btn grow">Refresh</button>
+      </div>
+      <p id="uploadProgress" class="status-line" aria-live="polite"></p>
+      <p id="libraryWarning" class="warn"></p>
+      <p id="libraryError" class="error" aria-live="polite"></p>
+      <ul id="libraryList" class="filelist"></ul>
+      <div id="libraryPreview" class="preview"></div>
+    </section>
+
+    <section class="card" aria-labelledby="playlistHeading">
+      <div class="card-head">
+        <h2 id="playlistHeading">Playlist</h2>
+        <label class="switch" for="playlistEnabledToggle">
+          <input id="playlistEnabledToggle" type="checkbox">
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>Enabled</span>
+        </label>
+      </div>
+      <p class="hint">Replaces the local folder while it has entries; falls back to the folder when unreachable.</p>
+      <label for="playlistUrlInput">Playlist URL</label>
+      <input id="playlistUrlInput" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://example.com/playlist.json">
+      <label for="playlistRefreshInput">Refresh interval</label>
+      <div class="inline-field">
+        <input id="playlistRefreshInput" type="number" min="30" max="3600"
+               inputmode="numeric" autocomplete="off">
+        <span>s</span>
+      </div>
+      <p id="mediaSourceState" class="status-line"></p>
+      <p id="playlistError" class="error" aria-live="polite"></p>
+      <div class="row">
+        <button type="button" id="savePlaylistButton" class="btn primary">Save</button>
+        <span id="playlistSaved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </section>
   </section>
 
-  <section class="card">
-    <h2>Navigation</h2>
-    <div class="row wrap">
-      <button id="navBack">Back</button>
-      <button id="navForward">Forward</button>
-      <button id="navHome">Home</button>
-      <button id="navReload">Reload</button>
-      <button id="navStop">Stop</button>
-    </div>
+  <!-- ================================================================ QMS -->
+  <section id="panel-qms" class="panel hidden" role="tabpanel" aria-labelledby="tab-qms" tabindex="0">
+
+    <section class="card" aria-labelledby="queueHeading">
+      <h2 id="queueHeading">QMS URL</h2>
+      <label for="mediaQmsUrlInput">QMS page shown in the QMS view</label>
+      <input id="mediaQmsUrlInput" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://example.com/qms">
+      <p class="hint">Leave blank to use the Home URL.</p>
+
+      <details class="advanced" id="advancedContent">
+        <summary>Selectors and call detection</summary>
+        <p class="hint">CSS selectors used to read calls from the QMS page. Leave blank to keep the saved value.</p>
+
+        <label for="mediaStripSelectorInput">Strip selector <span class="muted">(call card list)</span></label>
+        <input id="mediaStripSelectorInput" type="text" autocomplete="off"
+               placeholder="main &gt; div:nth-child(1)">
+
+        <label for="mediaNumberSelectorInput">Number selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaNumberSelectorInput" type="text" autocomplete="off"
+               placeholder="div:first-child &gt; span">
+
+        <label for="mediaLocationSelectorInput">Location selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaLocationSelectorInput" type="text" autocomplete="off"
+               placeholder="div:nth-child(2) &gt; span:first-child">
+
+        <label for="mediaTimeSelectorInput">Time selector <span class="muted">(relative to card)</span></label>
+        <input id="mediaTimeSelectorInput" type="text" autocomplete="off"
+               placeholder="div:nth-child(2) &gt; span:nth-child(2)">
+
+        <label for="mediaCallSourceInput">Call source</label>
+        <select id="mediaCallSourceInput">
+          <option value="dom">DOM change (recommended)</option>
+          <option value="dom_or_audio">DOM change or chime</option>
+          <option value="audio">Chime only</option>
+        </select>
+
+        <label for="mediaUiScaleInput">QMS UI scale</label>
+        <div class="inline-field">
+          <input id="mediaUiScaleInput" type="number" min="80" max="200"
+                 inputmode="numeric" autocomplete="off">
+          <span>%</span>
+        </div>
+      </details>
+
+      <p id="mediaError" class="error" aria-live="polite"></p>
+      <div class="row">
+        <button type="button" id="saveMedia" class="btn primary">Save</button>
+        <span id="queueSaved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="browserHeading">
+      <h2 id="browserHeading">QMS view</h2>
+      <label for="urlInput">Open URL</label>
+      <input id="urlInput" type="text" inputmode="url" autocomplete="off"
+             placeholder="https://example.com">
+      <div class="row">
+        <button type="button" id="openButton" class="btn primary grow">Open</button>
+        <button type="button" id="openHomeButton" class="btn grow">Open + set Home URL</button>
+      </div>
+      <div class="row toolbar">
+        <button type="button" id="navBack" class="btn">Back</button>
+        <button type="button" id="navForward" class="btn">Forward</button>
+        <button type="button" id="navHome" class="btn">Home</button>
+        <button type="button" id="navReload" class="btn">Reload</button>
+        <button type="button" id="navStop" class="btn">Stop</button>
+      </div>
+    </section>
   </section>
 
-  <section class="card">
-    <h2>Remote</h2>
-    <div class="dpad">
-      <button id="dpadUp" class="dpad-btn up">&#8593;</button>
-      <button id="dpadLeft" class="dpad-btn left">&#8592;</button>
-      <button id="dpadOk" class="dpad-btn ok primary">OK</button>
-      <button id="dpadRight" class="dpad-btn right">&#8594;</button>
-      <button id="dpadDown" class="dpad-btn down">&#8595;</button>
-    </div>
-    <div class="row">
-      <button id="dpadBack">BACK</button>
-    </div>
+  <!-- ============================================================ DISPLAY -->
+  <section id="panel-display" class="panel hidden" role="tabpanel" aria-labelledby="tab-display" tabindex="0">
+
+    <section class="card" aria-labelledby="bandsHeading">
+      <h2 id="bandsHeading">Split layout</h2>
+      <p class="hint">Bands used in Split mode; they must total 100%.</p>
+
+      <label for="mediaSplitInput">Media band <span class="range-value" id="splitValue">71%</span></label>
+      <input id="mediaSplitInput" type="range" min="55" max="85" step="1" value="71">
+
+      <label for="mediaHeaderInput">Header band <span class="range-value" id="headerValue">7%</span></label>
+      <input id="mediaHeaderInput" type="range" min="3" max="15" step="1" value="7">
+
+      <label for="mediaStripInput">QMS strip <span class="range-value" id="stripValue">22%</span></label>
+      <input id="mediaStripInput" type="range" min="18" max="40" step="1" value="22">
+
+      <p id="bandTotalLine" class="band-total" role="status" aria-live="polite">Total 100%</p>
+      <p id="bandError" class="error" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="sizesHeading">
+      <h2 id="sizesHeading">Text</h2>
+      <p class="hint">Pixel sizes at 1080p; they scale with the TV.</p>
+
+      <label for="mediaCurrentNumberPxInput">Current number <span class="range-value" id="currentNumberPxValue">&mdash;</span></label>
+      <input id="mediaCurrentNumberPxInput" type="range" min="48" max="160" step="1" value="96">
+
+      <label for="mediaHistoryNumberPxInput">History numbers <span class="range-value" id="historyNumberPxValue">&mdash;</span></label>
+      <input id="mediaHistoryNumberPxInput" type="range" min="32" max="96" step="1" value="56">
+
+      <label for="mediaLabelPxInput">Labels <span class="range-value" id="labelPxValue">&mdash;</span></label>
+      <input id="mediaLabelPxInput" type="range" min="10" max="24" step="1" value="15">
+
+      <label for="mediaLanguageInput">UI language</label>
+      <select id="mediaLanguageInput">
+        <option value="ms">Bahasa Melayu</option>
+        <option value="en">English</option>
+        <option value="zh">中文</option>
+        <option value="ta">தமிழ்</option>
+      </select>
+    </section>
+
+    <section class="card" aria-labelledby="callsHeading">
+      <h2 id="callsHeading">Playback</h2>
+      <div class="grid2">
+        <div>
+          <label for="mediaDwellInput">QMS focus on call</label>
+          <div class="inline-field">
+            <input id="mediaDwellInput" type="number" min="20" max="180"
+                   inputmode="numeric" autocomplete="off">
+            <span>s</span>
+          </div>
+        </div>
+        <div>
+          <label for="mediaImageDurationInput">Image duration</label>
+          <div class="inline-field">
+            <input id="mediaImageDurationInput" type="number" min="3" max="120"
+                   inputmode="numeric" autocomplete="off">
+            <span>s</span>
+          </div>
+        </div>
+        <div>
+          <label for="mediaVolumeInput">Media volume</label>
+          <div class="inline-field">
+            <input id="mediaVolumeInput" type="number" min="0" max="100"
+                   inputmode="numeric" autocomplete="off">
+            <span>%</span>
+          </div>
+        </div>
+      </div>
+
+      <label for="mediaFillModeInput">Image fill mode</label>
+      <select id="mediaFillModeInput">
+        <option value="letterboxBlur">Letterbox, blurred (recommended)</option>
+        <option value="letterbox">Letterbox, black</option>
+        <option value="cover">Cover (crop)</option>
+      </select>
+
+      <p id="displayError" class="error" aria-live="polite"></p>
+      <div class="row">
+        <button type="button" id="saveDisplaySettings" class="btn primary">Save display settings</button>
+        <span id="displaySaved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </section>
   </section>
 
-  <section class="card">
-    <h2>Browser</h2>
-    <div class="row wrap">
-      <button id="restartWebview">Restart WebView</button>
-      <button id="clearCache">Clear Cache</button>
-      <button id="clearSiteData">Clear Site Data</button>
-    </div>
-  </section>
+  <!-- =========================================================== SETTINGS -->
+  <section id="panel-settings" class="panel hidden" role="tabpanel" aria-labelledby="tab-settings" tabindex="0">
 
-  <section class="card">
-    <h2>Settings</h2>
-    <label for="homeUrlInput">Home URL</label>
-    <div class="row">
-      <input id="homeUrlInput" type="text" inputmode="url" class="grow" autocomplete="off">
-      <button id="saveHomeUrl">Save</button>
-    </div>
+    <section class="card" aria-labelledby="nameHeading">
+      <h2 id="nameHeading">Device</h2>
+      <p id="deviceError" class="error" aria-live="polite"></p>
 
-    <label for="deviceNameInput">Device Name</label>
-    <div class="row">
-      <input id="deviceNameInput" type="text" maxlength="40" class="grow" autocomplete="off">
-      <button id="saveDeviceName">Save</button>
-    </div>
+      <label for="deviceNameInput">Device name <span class="muted">(mDNS)</span></label>
+      <div class="row">
+        <input id="deviceNameInput" type="text" maxlength="40" class="grow" autocomplete="off">
+        <button type="button" id="saveDeviceName" class="btn">Save</button>
+      </div>
+      <p id="nameSaved" class="saved" role="status" aria-live="polite"></p>
 
-    <label for="portInput">Controller Port</label>
-    <div class="row">
-      <input id="portInput" type="number" min="1024" max="65535" class="grow" autocomplete="off">
-      <button id="savePort">Save</button>
-    </div>
+      <label for="portInput">Controller port</label>
+      <div class="row">
+        <input id="portInput" type="number" min="1024" max="65535" class="grow" autocomplete="off">
+        <button type="button" id="savePort" class="btn">Save</button>
+      </div>
+      <p class="hint">This page moves to the new port.</p>
+      <p id="portSaved" class="saved" role="status" aria-live="polite"></p>
 
-    <p class="warn">Trusted networks widen who can reach the pairing prompt from
-    outside the TV's own subnet. The pairing PIN and bearer tokens still gate
-    every actual control action; an unpaired device that reaches the page can
-    only see the pairing screen.</p>
-    <label for="networkInput">Add trusted network (IPv4 CIDR, e.g. 10.10.1.0/24)</label>
-    <div class="row">
-      <input id="networkInput" type="text" inputmode="text" class="grow" autocomplete="off" placeholder="10.10.1.0/24">
-      <button id="addNetwork">Add</button>
-    </div>
-    <p id="networkError" class="error"></p>
-    <ul id="networkList" class="netlist"></ul>
+      <label for="homeUrlInput">Home URL</label>
+      <div class="row">
+        <input id="homeUrlInput" type="text" inputmode="url" class="grow" autocomplete="off">
+        <button type="button" id="saveHomeUrl" class="btn">Save</button>
+      </div>
+      <p id="homeSaved" class="saved" role="status" aria-live="polite"></p>
 
-    <label class="check"><input id="fullscreenToggle" type="checkbox"> Fullscreen</label>
-    <label class="check"><input id="keepAwakeToggle" type="checkbox"> Keep Screen Awake</label>
-  </section>
+      <label class="switch" for="fullscreenToggle">
+        <input id="fullscreenToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Fullscreen</span>
+      </label>
+      <label class="switch" for="keepAwakeToggle">
+        <input id="keepAwakeToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Keep screen on</span>
+      </label>
+      <p id="displayToggleSaved" class="saved" role="status" aria-live="polite"></p>
+    </section>
 
-  <section class="card">
-    <h2>MQTT</h2>
-    <p class="warn">Broker access equals control. Anyone who can publish to the
-    <code>&lt;base&gt;/command</code> topic can drive this tablet — the controller
-    token is <strong>not</strong> required for MQTT commands. The broker
-    credentials are the only gate. Leave MQTT disabled unless you intend this.</p>
-    <p id="mqttState" class="muted"></p>
-    <label class="check"><input id="mqttEnabledToggle" type="checkbox"> Enable MQTT</label>
+    <section class="card" aria-labelledby="networksHeading">
+      <h2 id="networksHeading">Trusted networks</h2>
+      <p class="hint">Extra subnets allowed to reach pairing. The PIN and pairing token still gate every action.</p>
+      <label for="networkInput">Add subnet (IPv4 CIDR)</label>
+      <div class="row">
+        <input id="networkInput" type="text" inputmode="text" class="grow"
+               autocomplete="off" placeholder="10.10.1.0/24">
+        <button type="button" id="addNetwork" class="btn">Add</button>
+      </div>
+      <p id="networkError" class="error" aria-live="polite"></p>
+      <ul id="networkList" class="netlist"></ul>
+    </section>
 
-    <label for="mqttHostInput">Broker host</label>
-    <input id="mqttHostInput" type="text" autocomplete="off" placeholder="192.168.1.10">
+    <section class="card" aria-labelledby="repairHeading">
+      <h2 id="repairHeading">WebView</h2>
+      <div class="row toolbar">
+        <button type="button" id="restartWebview" class="btn">Restart WebView</button>
+        <button type="button" id="clearCache" class="btn">Clear cache</button>
+        <button type="button" id="clearSiteData" class="btn danger">Clear site data</button>
+      </div>
+      <p id="browserSaved" class="status-line" role="status" aria-live="polite"></p>
+    </section>
 
-    <label for="mqttPortInput">Port</label>
-    <input id="mqttPortInput" type="number" min="1" max="65535" autocomplete="off">
+    <details class="card advanced" id="mqttCard">
+      <summary>MQTT</summary>
+      <p class="warn">Broker access equals control: MQTT commands do not need the
+        controller token. The broker credentials are the only gate.</p>
+      <p id="mqttState" class="status-line"></p>
+      <label class="switch" for="mqttEnabledToggle">
+        <input id="mqttEnabledToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Enabled</span>
+      </label>
+      <div class="grid2">
+        <div>
+          <label for="mqttHostInput">Broker host</label>
+          <input id="mqttHostInput" type="text" autocomplete="off" placeholder="192.168.1.10">
+        </div>
+        <div>
+          <label for="mqttPortInput">Port</label>
+          <input id="mqttPortInput" type="number" min="1" max="65535" inputmode="numeric"
+                 autocomplete="off">
+        </div>
+      </div>
+      <label class="switch" for="mqttTlsToggle">
+        <input id="mqttTlsToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>TLS</span>
+      </label>
+      <div class="grid2">
+        <div>
+          <label for="mqttUsernameInput">Username</label>
+          <input id="mqttUsernameInput" type="text" autocomplete="off">
+        </div>
+        <div>
+          <label for="mqttPasswordInput">Password</label>
+          <input id="mqttPasswordInput" type="password" autocomplete="new-password"
+                 placeholder="unchanged">
+        </div>
+      </div>
+      <label for="mqttBaseTopicInput">Base topic</label>
+      <input id="mqttBaseTopicInput" type="text" autocomplete="off"
+             placeholder="terebibro/&lt;device&gt;">
+      <label class="switch" for="mqttDiscoveryToggle">
+        <input id="mqttDiscoveryToggle" type="checkbox">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span>Home Assistant discovery</span>
+      </label>
+      <label for="mqttDiscoveryPrefixInput">Discovery prefix</label>
+      <input id="mqttDiscoveryPrefixInput" type="text" autocomplete="off"
+             placeholder="homeassistant">
+      <p id="mqttError" class="error" aria-live="polite"></p>
+      <div class="row">
+        <button type="button" id="saveMqtt" class="btn primary">Save</button>
+        <button type="button" id="clearMqttPassword" class="btn danger">Clear password</button>
+        <span id="mqttSaved" class="saved" role="status" aria-live="polite"></span>
+      </div>
+    </details>
 
-    <label class="check"><input id="mqttTlsToggle" type="checkbox"> Use TLS (ssl://)</label>
+    <details class="card advanced" id="diagnosticsCard">
+      <summary>Diagnostics</summary>
+      <p id="webViewWarning" class="warn hidden"></p>
+      <h3 class="subhead">Device</h3>
+      <dl class="status-grid">
+        <dt>Device name</dt><dd id="infoDeviceName"></dd>
+        <dt>App version</dt><dd id="infoAppVersion"></dd>
+        <dt>Android</dt><dd id="infoAndroidVersion"></dd>
+        <dt>SDK</dt><dd id="infoSdk"></dd>
+        <dt>WebView</dt><dd id="infoWebView" class="break"></dd>
+        <dt>IP address</dt><dd id="infoIp"></dd>
+        <dt>Port</dt><dd id="infoPort"></dd>
+        <dt>Uptime</dt><dd id="infoUptime"></dd>
+        <dt>MQTT</dt><dd id="infoMqtt"></dd>
+        <dt>Paired controllers</dt><dd id="infoPaired"></dd>
+      </dl>
+      <h3 class="subhead">QMS view</h3>
+      <dl class="status-grid">
+        <dt>URL</dt><dd id="currentUrl" class="break"></dd>
+        <dt>Title</dt><dd id="currentTitle" class="break"></dd>
+        <dt>Loading</dt><dd id="loadingText">no</dd>
+        <dt>Network</dt><dd id="networkText">unknown</dd>
+      </dl>
+    </details>
 
-    <label for="mqttUsernameInput">Username</label>
-    <input id="mqttUsernameInput" type="text" autocomplete="off">
-
-    <label for="mqttPasswordInput">Password</label>
-    <input id="mqttPasswordInput" type="password" autocomplete="new-password" placeholder="leave blank to keep">
-
-    <label for="mqttBaseTopicInput">Base topic</label>
-    <input id="mqttBaseTopicInput" type="text" autocomplete="off" placeholder="terebibro/&lt;device&gt;">
-
-    <label class="check"><input id="mqttDiscoveryToggle" type="checkbox"> Home Assistant discovery</label>
-
-    <label for="mqttDiscoveryPrefixInput">Discovery prefix</label>
-    <input id="mqttDiscoveryPrefixInput" type="text" autocomplete="off" placeholder="homeassistant">
-
-    <div class="row">
-      <button id="saveMqtt" class="primary">Save MQTT</button>
-      <button id="clearMqttPassword" class="danger">Clear password</button>
-    </div>
-    <p id="mqttError" class="error"></p>
-  </section>
-
-  <section class="card">
-    <h2>Media</h2>
-    <p class="warn">Media mode changes what the TV shows. Leave it off until you
-    are in front of the TV and can see the result.</p>
-    <p id="mediaModeState" class="muted"></p>
-    <label class="check"><input id="mediaEnabledToggle" type="checkbox"> Enable media mode</label>
-
-    <label>Mode</label>
-    <div class="row wrap">
-      <button id="mediaModeQms">QMS only</button>
-      <button id="mediaModeMedia">Media only</button>
-      <button id="mediaModeSplit">Split</button>
-    </div>
-
-    <label for="mediaSplitInput">Media band %</label>
-    <input id="mediaSplitInput" type="number" min="55" max="85" autocomplete="off">
-
-    <label for="mediaHeaderInput">Header band %</label>
-    <input id="mediaHeaderInput" type="number" min="3" max="15" autocomplete="off">
-
-    <label for="mediaStripInput">Queue band %</label>
-    <input id="mediaStripInput" type="number" min="18" max="40" autocomplete="off">
-
-    <label for="mediaDwellInput">Dwell seconds</label>
-    <input id="mediaDwellInput" type="number" min="20" max="180" autocomplete="off">
-
-    <label for="mediaVolumeInput">Volume %</label>
-    <input id="mediaVolumeInput" type="number" min="0" max="100" autocomplete="off">
-
-    <label for="mediaImageDurationInput">Image duration (seconds)</label>
-    <input id="mediaImageDurationInput" type="number" min="3" max="120" autocomplete="off">
-
-    <label for="mediaFillModeInput">Fill mode</label>
-    <select id="mediaFillModeInput">
-      <option value="letterboxBlur">Letterbox with blurred fill</option>
-      <option value="letterbox">Letterbox</option>
-      <option value="cover">Cover (crops)</option>
-    </select>
-
-    <label for="mediaLanguageInput">Signage language</label>
-    <select id="mediaLanguageInput">
-      <option value="ms">Bahasa Melayu</option>
-      <option value="en">English</option>
-      <option value="zh">中文</option>
-      <option value="ta">தமிழ்</option>
-    </select>
-
-    <label for="mediaUiScaleInput">Vendor page scale %</label>
-    <input id="mediaUiScaleInput" type="number" min="80" max="200" autocomplete="off">
-
-    <p class="muted">Queue board</p>
-
-    <label for="mediaQmsUrlInput">QMS URL</label>
-    <input id="mediaQmsUrlInput" type="text" inputmode="url" autocomplete="off"
-           placeholder="https://example.com/board">
-    <p class="muted">Blank uses the Home URL</p>
-
-    <label for="mediaStripSelectorInput">List container selector</label>
-    <input id="mediaStripSelectorInput" type="text" autocomplete="off"
-           placeholder="main &gt; div:nth-child(1)">
-    <p class="muted">the column that holds the call cards</p>
-
-    <label for="mediaNumberSelectorInput">Number selector</label>
-    <input id="mediaNumberSelectorInput" type="text" autocomplete="off"
-           placeholder="div:first-child &gt; span">
-    <p class="muted">relative to a call card</p>
-
-    <label for="mediaLocationSelectorInput">Location selector</label>
-    <input id="mediaLocationSelectorInput" type="text" autocomplete="off"
-           placeholder="div:nth-child(2) &gt; span:first-child">
-    <p class="muted">relative to a call card</p>
-
-    <label for="mediaTimeSelectorInput">Time selector</label>
-    <input id="mediaTimeSelectorInput" type="text" autocomplete="off"
-           placeholder="div:nth-child(2) &gt; span:nth-child(2)">
-    <p class="muted">relative to a call card</p>
-
-    <label for="mediaCallSourceInput">Call source</label>
-    <select id="mediaCallSourceInput">
-      <option value="dom">DOM only</option>
-      <option value="dom_or_audio">DOM or chime</option>
-      <option value="audio">Chime only</option>
-    </select>
-
-    <p class="warn">The HTTP playlist replaces the local folder while it has at
-    least one valid entry. A bad entry is skipped; an unreachable or invalid
-    playlist falls back to the folder, so the screen is never left blank. The
-    last good copy is kept on the TV for the next boot.</p>
-    <label class="check"><input id="playlistEnabledToggle" type="checkbox"> Use HTTP playlist</label>
-
-    <label for="playlistUrlInput">Playlist URL (http/https)</label>
-    <input id="playlistUrlInput" type="text" inputmode="url" autocomplete="off"
-           placeholder="https://example.com/playlist.json">
-
-    <label for="playlistRefreshInput">Playlist refresh (seconds)</label>
-    <input id="playlistRefreshInput" type="number" min="30" max="3600" autocomplete="off">
-
-    <p class="warn">Open a single web page in the media band — a Jellyfin UI or a
-    YouTube page. This uses a second WebView (extra memory) and is not a queue
-    item: the playlist and the local folder are ignored while it is open. The
-    D-pad only reaches the page in <strong>Media only</strong>; in Split the
-    remote keeps driving the queue board. The stored URL is returned masked
-    (<code>scheme://host/path</code>) and never logged, so this field shows it
-    as a hint: <strong>leave it blank to keep the stored URL</strong>, or type a
-    new one to replace it.</p>
-
-    <label for="mediaWebUrlInput">Web page URL (http/https)</label>
-    <input id="mediaWebUrlInput" type="text" inputmode="url" autocomplete="off"
-           placeholder="https://jellyfin.example.com/web">
-    <label class="check"><input id="mediaWebEnabledToggle" type="checkbox"> Open this page on start</label>
-    <label for="mediaSourceDefaultInput">Startup source</label>
-    <select id="mediaSourceDefaultInput">
-      <option value="local">Local folder</option>
-      <option value="playlist">HTTP playlist</option>
-      <option value="web">Web page</option>
-    </select>
-    <div class="row">
-      <button id="openMediaWeb">Open in media</button>
-    </div>
-    <p id="mediaWebError" class="error"></p>
-
-    <p id="mediaSourceState" class="muted"></p>
-
-    <div class="row">
-      <button id="saveMedia" class="primary">Save Media</button>
-    </div>
-    <p id="mediaError" class="error"></p>
-  </section>
-
-  <section class="card">
-    <h2>Library</h2>
-    <p id="librarySummary" class="muted">No media yet.</p>
-    <div class="row wrap">
-      <input id="libraryFileInput" type="file" class="grow"
-             accept="video/mp4,image/jpeg,image/png" multiple>
-      <button id="uploadButton" class="primary">Upload</button>
-      <button id="libraryReloadButton">Reload media</button>
-    </div>
-    <p id="uploadProgress" class="muted"></p>
-    <p id="libraryWarning" class="warn"></p>
-    <p id="libraryError" class="error"></p>
-    <ul id="libraryList" class="netlist"></ul>
-    <div id="libraryPreview"></div>
-  </section>
-
-  <section class="card">
-    <h2>Device</h2>
-    <p id="webViewWarning" class="warn hidden"></p>
-    <dl class="status-grid">
-      <dt>Device Name</dt><dd id="infoDeviceName"></dd>
-      <dt>App Version</dt><dd id="infoAppVersion"></dd>
-      <dt>Android Version</dt><dd id="infoAndroidVersion"></dd>
-      <dt>SDK</dt><dd id="infoSdk"></dd>
-      <dt>WebView</dt><dd id="infoWebView" class="break"></dd>
-      <dt>IP</dt><dd id="infoIp"></dd>
-      <dt>Port</dt><dd id="infoPort"></dd>
-      <dt>MQTT</dt><dd id="infoMqtt"></dd>
-      <dt>Paired devices</dt><dd id="infoPaired"></dd>
-    </dl>
-    <div class="row">
-      <button id="unpairButton" class="danger">Unpair this device</button>
-    </div>
+    <section class="card danger-zone" aria-labelledby="unpairHeading">
+      <h2 id="unpairHeading">Unpair</h2>
+      <p class="hint">This controller loses access. Pair again with the PIN on the TV.</p>
+      <button type="button" id="unpairButton" class="btn danger">Unpair this controller</button>
+    </section>
   </section>
 
 </main>

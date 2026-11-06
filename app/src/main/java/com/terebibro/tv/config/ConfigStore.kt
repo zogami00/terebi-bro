@@ -215,6 +215,7 @@ class ConfigStore(context: Context) {
         editor.putInt(KEY_MEDIA_HISTORY_CARD_MAX_PX, settings.historyCardMaxPx)
         editor.putString(KEY_MEDIA_UI_LANGUAGE, settings.uiLanguage.wire)
         editor.putBoolean(KEY_MEDIA_LOCAL_ENABLED, settings.mediaLocalEnabled)
+        editor.putString(KEY_MEDIA_LOCAL_FOLDER, settings.mediaLocalFolder)
         editor.putBoolean(KEY_MEDIA_PLAYLIST_ENABLED, settings.playlistEnabled)
         editor.putString(KEY_MEDIA_PLAYLIST_URL, settings.playlistUrl)
         editor.putInt(KEY_MEDIA_PLAYLIST_REFRESH_SEC, settings.playlistRefreshSec)
@@ -347,6 +348,7 @@ class ConfigStore(context: Context) {
         private const val KEY_MEDIA_HISTORY_CARD_MAX_PX = MediaSettingsRecovery.Keys.HISTORY_CARD_MAX_PX
         private const val KEY_MEDIA_UI_LANGUAGE = MediaSettingsRecovery.Keys.UI_LANGUAGE
         private const val KEY_MEDIA_LOCAL_ENABLED = MediaSettingsRecovery.Keys.LOCAL_ENABLED
+        private const val KEY_MEDIA_LOCAL_FOLDER = MediaSettingsRecovery.Keys.LOCAL_FOLDER
         private const val KEY_MEDIA_PLAYLIST_ENABLED = MediaSettingsRecovery.Keys.PLAYLIST_ENABLED
         private const val KEY_MEDIA_PLAYLIST_URL = MediaSettingsRecovery.Keys.PLAYLIST_URL
         private const val KEY_MEDIA_PLAYLIST_REFRESH_SEC = MediaSettingsRecovery.Keys.PLAYLIST_REFRESH_SEC

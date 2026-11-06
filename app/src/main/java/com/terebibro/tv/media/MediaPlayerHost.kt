@@ -37,7 +37,9 @@ class MediaPlayerHost(
     private val backdropView: ImageView,
     private val imageView: ImageView,
     private val placeholder: TextView,
-    private val listener: Listener
+    private val listener: Listener,
+    /** The activity's store, so playback reads the same folder the queue was listed from. */
+    private val store: MediaStore
 ) {
 
     interface Listener {
@@ -52,7 +54,6 @@ class MediaPlayerHost(
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val store = MediaStore(activity)
     private val audioManager = activity.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     private val decode = Executors.newSingleThreadExecutor { runnable ->
@@ -483,7 +484,7 @@ class MediaPlayerHost(
      */
     private fun videoSource(item: MediaItem): String? {
         if (item.remote) return item.id
-        val base = store.dir() ?: return null
+        val base = store.playDir() ?: return null
         return MediaPaths.localPlaybackPath(base, item)
     }
 
@@ -500,7 +501,7 @@ class MediaPlayerHost(
             decodeAndShowRemote(item.id)
             return
         }
-        val base = store.dir()
+        val base = store.playDir()
         if (base == null) {
             fail("Media storage is unavailable")
             return

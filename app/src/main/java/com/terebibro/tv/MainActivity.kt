@@ -2,7 +2,14 @@ package com.terebibro.tv
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import org.json.JSONArray
+import org.json.JSONObject
 import android.content.res.Configuration
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -11,6 +18,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.SurfaceView
@@ -27,6 +35,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.webkit.WebChromeClient
+import android.webkit.WebView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import com.terebibro.tv.BuildConfig
@@ -35,11 +44,16 @@ import com.terebibro.tv.device.DeviceInfo
 import com.terebibro.tv.device.WebViewSupport
 import com.terebibro.tv.mdns.MdnsAdvertiser
 import com.terebibro.tv.media.MediaController
+import com.terebibro.tv.media.KeyTarget
 import com.terebibro.tv.media.MediaKey
 import com.terebibro.tv.media.MediaKeyGuard
+import com.terebibro.tv.media.MediaKeyRoute
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
+import com.terebibro.tv.media.MediaFolders
+import com.terebibro.tv.media.MediaPointer
+import com.terebibro.tv.media.MediaText
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaStore
 import com.terebibro.tv.media.MediaWebSurface
@@ -121,6 +135,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var menuMediaWebButton: Button
     private lateinit var menuMediaModeButton: Button
     private lateinit var menuMediaKeyboardButton: Button
+    private lateinit var menuMediaPointerButton: Button
     private lateinit var menuMediaBanner: TextView
     private lateinit var menuSettingsButton: Button
     private lateinit var menuDeviceButton: Button
@@ -136,6 +151,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var webViewController: WebViewController
     private lateinit var mediaStore: MediaStore
     private lateinit var mediaWebSurface: MediaWebSurface
+    private lateinit var mediaPointer: MediaPointer
+    /** True once the current OK hold has toggled the pointer. */
+    private var okLongPressed = false
     private lateinit var mediaController: MediaController
     private lateinit var auth: AuthManager
     private lateinit var wsHub: WsHub
@@ -187,6 +205,44 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     /** The mode the last layout pass applied; used to notice a mode change. */
     private var lastMediaMode = MediaMode.QMS_ONLY
 
+    /**
+     * The state the last layout pass left behind. A pass whose starting key
+     * equals this one would assign the same params and visibilities as the
+     * previous pass, so it is skipped: the QMS fallback probe can reach the
+     * controller once a second, and re-applying the layout (and re-requesting
+     * focus) on every tick would reset the media page's DOM focus and drop the
+     * D-pad selection.
+     */
+    private var appliedMediaLayout: MediaLayoutKey? = null
+
+    /**
+     * Everything [applyMediaLayoutOnMain] reads before it mutates a view. The
+     * current visibilities are part of it, so a late callback that re-shows a
+     * surface still differs from the cached key and is repaired.
+     */
+    private data class MediaLayoutKey(
+        val mode: MediaMode,
+        val widthPx: Int,
+        val heightPx: Int,
+        val density: Float,
+        val headerBandPercent: Int,
+        val stripHeightPercent: Int,
+        val webSource: Boolean,
+        val customViewVisible: Boolean,
+        val mediaVisibility: Int,
+        val webVisibility: Int,
+        val qmsVisibility: Int
+    )
+
+    /**
+     * Logged once when the synthetic-key guard had to drop a key that would
+     * otherwise have reached the QMS view while `MEDIA_ONLY` with a web source
+     * owns the screen. The route predicate should make this unreachable; the
+     * bit keeps a regression from flooding logcat without hiding it.
+     */
+    @Volatile
+    private var qmsSyntheticKeyGuardLogged = false
+
     /** The inputs the injected script was last built from; avoids needless rebuilds. */
     private var appliedQmsSignature: String? = null
 
@@ -216,7 +272,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             if (::mediaController.isInitialized) mediaController.onQmsSignal(kind, value)
         }
 
-        mediaStore = MediaStore(this)
+        mediaStore = MediaStore(this) { config.mediaSettings.mediaLocalFolder }
+        registerStorageReceiver()
         // The second renderer is created lazily on the first web source, but
         // the surface object exists now so the controller can own its focus and
         // lifecycle without Android types.
@@ -231,6 +288,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             },
             fullscreenHost = this
         )
+        mediaPointer = MediaPointer(mediaContainer) {
+            mediaFullscreenView ?: mediaWebSurface.view
+        }
         mediaController = MediaController(
             mediaStore,
             { config.mediaSettings },
@@ -259,7 +319,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 override fun onPlaybackError(message: String) = mediaController.playbackError(message)
                 override fun onPlaybackPausedByFocus() = mediaController.onPlaybackPausedByFocus()
                 override fun onFocusGained() = mediaController.onFocusGained()
-            }
+            },
+            mediaStore
         )
         mediaController.attach(host)
         // Install the observer before the first load when media mode is already
@@ -369,7 +430,90 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // appear without a settings change; the controller re-reads the folder
         // off the UI thread and keeps the playing item when it still exists.
         mediaController.onResumeRescan()
+        // A picked folder outside app storage needs the media-read permission;
+        // ask once per launch (the grant returns through onResume above).
+        if (config.mediaSettings.mediaLocalFolder.isNotEmpty() && !hasMediaReadPermission() &&
+            !mediaPermissionAsked
+        ) {
+            mediaPermissionAsked = true
+            requestPermissions(mediaReadPermissions, REQUEST_MEDIA_READ)
+        }
         if (config.fullscreen) enterImmersiveMode()
+    }
+
+    // ---------------------------------------------------------------------
+    // Local folder on the TV or a USB/SD volume
+    // ---------------------------------------------------------------------
+
+    private var mediaPermissionAsked = false
+
+    private val mediaReadPermissions: Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+    private fun hasMediaReadPermission(): Boolean =
+        mediaReadPermissions.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+
+    /** A USB drive or SD card mounted or removed: re-read the play folder. */
+    private val storageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = onMediaLibraryChanged()
+    }
+
+    private fun registerStorageReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_MEDIA_MOUNTED)
+            addAction(Intent.ACTION_MEDIA_UNMOUNTED)
+            addAction(Intent.ACTION_MEDIA_REMOVED)
+            addAction(Intent.ACTION_MEDIA_EJECT)
+            addDataScheme("file")
+        }
+        // System broadcasts reach a not-exported receiver.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(storageReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(storageReceiver, filter)
+        }
+    }
+
+    override fun mediaFolders(path: String): ApiResult =
+        MainThreadBridge.runOnMain { it.listMediaFolders(path) } ?: ApiResult.unavailable()
+
+    /**
+     * One level of the folder browser. A blank [path] returns only the roots.
+     * Without the media-read permission the TV shows the system prompt and the
+     * controller is told to retry once it is allowed.
+     */
+    private fun listMediaFolders(path: String): ApiResult {
+        if (!hasMediaReadPermission()) {
+            requestPermissions(mediaReadPermissions, REQUEST_MEDIA_READ)
+            return ApiResult.conflict(
+                "permission_needed",
+                "Allow access to photos and videos on the TV, then try again"
+            )
+        }
+        // ponytail: lists on the main thread; fine for a folder, move to io if a huge USB tree stalls the UI.
+        val roots = mediaStore.storageRoots()
+        val rootFiles = roots.map { it.second }
+        val rootsJson = JSONArray()
+        roots.forEach { (label, dir) -> rootsJson.put(JSONObject().put("label", label).put("path", dir.absolutePath)) }
+        if (path.isEmpty()) {
+            return ApiResult.ok("path" to "", "parent" to "", "roots" to rootsJson, "folders" to JSONArray(), "mediaCount" to 0)
+        }
+        val dir = MediaFolders.within(rootFiles, path)
+            ?: return ApiResult.badRequest("bad_folder", "Folder not found on the TV")
+        val folders = JSONArray()
+        MediaFolders.subfolders(dir).forEach { folders.put(JSONObject().put("name", it.name).put("path", it.absolutePath)) }
+        val parent = dir.parentFile?.let { MediaFolders.within(rootFiles, it.path) }?.absolutePath ?: ""
+        return ApiResult.ok(
+            "path" to dir.absolutePath,
+            "parent" to parent,
+            "roots" to rootsJson,
+            "folders" to folders,
+            "mediaCount" to MediaFolders.mediaCount(dir)
+        )
     }
 
     override fun onPause() {
@@ -420,6 +564,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     override fun onDestroy() {
         unregisterBackHandling()
+        try {
+            unregisterReceiver(storageReceiver)
+        } catch (ignored: Exception) {
+            // Never registered.
+        }
         networkCallback?.let {
             try {
                 (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
@@ -502,6 +651,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaWebButton = findViewById(R.id.menu_media_web)
         menuMediaModeButton = findViewById(R.id.menu_media_mode)
         menuMediaKeyboardButton = findViewById(R.id.menu_media_keyboard)
+        menuMediaPointerButton = findViewById(R.id.menu_media_pointer)
         menuMediaBanner = findViewById(R.id.menu_media_banner)
         menuSettingsButton = findViewById(R.id.menu_settings)
         menuDeviceButton = findViewById(R.id.menu_device_info)
@@ -559,6 +709,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaWebButton.setOnClickListener { showMediaWebDialog() }
         menuMediaModeButton.setOnClickListener { cycleMediaMode() }
         menuMediaKeyboardButton.setOnClickListener { showMediaKeyboard() }
+        menuMediaPointerButton.setOnClickListener {
+            hideMenu()
+            mediaPointer.toggle(mediaPageOwnsKeys())
+        }
         menuSettingsButton.setOnClickListener {
             hideMenu()
             showInfoOverlay(issueNewPin = auth.currentPin() == null)
@@ -960,6 +1114,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             View.GONE
         }
         menuMediaKeyboardButton.visibility = keyboardVisibility
+        menuMediaPointerButton.visibility = keyboardVisibility
     }
 
     /**
@@ -1109,6 +1264,13 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         ) {
             hideMediaFullscreen()
         }
+        // One apply per real change. The probe heartbeat reaches this function
+        // once a second; skipping an identical pass keeps LayoutParams, the
+        // band page's layout and the focus target untouched, so a D-pad
+        // selection in the page survives between presses.
+        syncPointer()
+        val layoutKey = mediaLayoutKey(mode)
+        if (layoutKey == appliedMediaLayout) return
         val mediaParams = mediaContainer.layoutParams as FrameLayout.LayoutParams
         val webParams = webViewContainer.layoutParams as FrameLayout.LayoutParams
 
@@ -1151,6 +1313,40 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         mediaContainer.layoutParams = mediaParams
         webViewContainer.layoutParams = webParams
 
+        // `MEDIA_ONLY` hides the QMS surface outright, not just behind the
+        // band: a page that is only covered keeps its own visibility, its Split
+        // bounds and its place in the focus search. This function is the single
+        // place that sets the container back to VISIBLE, so hiding it here (and
+        // asserting it below) covers the fullscreen dismissal, the rebuild and
+        // the boot-rule paths — all of them re-apply this layout.
+        val qmsHidden = MediaWebPolicy.hidesQmsSurface(mode)
+        webViewController.setContentVisible(!qmsHidden)
+        if (qmsHidden) webViewContainer.visibility = View.GONE
+
+        // The band owns the geometry. The page is re-filled on every pass so a
+        // page created while the container was the Split band cannot keep that
+        // height after the mode changed.
+        if (::mediaWebSurface.isInitialized) mediaWebSurface.applyBandLayout()
+
+        // Assertion-style guard: no layout apply may leave any of the QMS
+        // surface visible while the mode says the media band has the screen.
+        assertQmsHiddenInMediaOnly(mode)
+
+        // A page in MEDIA_ONLY owns the D-pad itself. The container is
+        // focusable so a native item has somewhere to land, but while the page
+        // is showing it must not compete: a focused container would take the
+        // key and the guard no longer swallows it. Restore the container as
+        // soon as the page stops being the band's source.
+        val mediaPageActive = mode == MediaMode.MEDIA_ONLY && mediaController.isWebSource()
+        mediaContainer.isFocusable = !mediaPageActive
+        // The page must end this pass focused, otherwise the first D-pad press
+        // has nowhere to land. The surface requests focus now and again after
+        // the layout this function just requested, so the assertion survives
+        // the new bounds.
+        if (mediaPageActive && mediaFullscreenView == null && !anyOverlayVisible()) {
+            mediaController.refocusWeb()
+        }
+
         // Focus follows the visible surface. Leaving the workspace hides the
         // media band, and the D-pad must go back to the QMS page rather than to
         // a gone view; entering it puts focus on the band (the page itself when
@@ -1166,7 +1362,89 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 webViewController.requestWebFocus()
             }
         }
+        // Cache the state this pass *produced*, not the one it started from:
+        // the pass itself changes visibilities, and caching the pre-pass key
+        // would make the next call look like a change.
+        appliedMediaLayout = mediaLayoutKey(mode)
         updateMediaMenuVisibility()
+        logMediaLayoutOnMain(mode)
+    }
+
+    /**
+     * The inputs [applyMediaLayoutOnMain] derives its result from, captured
+     * before it mutates any view.
+     */
+    private fun mediaLayoutKey(mode: MediaMode): MediaLayoutKey {
+        val metrics = resources.displayMetrics
+        return MediaLayoutKey(
+            mode = mode,
+            widthPx = metrics.widthPixels,
+            heightPx = metrics.heightPixels,
+            density = metrics.density,
+            headerBandPercent = config.mediaSettings.headerBandPercent,
+            stripHeightPercent = config.mediaSettings.stripHeightPercent,
+            webSource = mediaController.isWebSource(),
+            customViewVisible = customView != null,
+            mediaVisibility = mediaContainer.visibility,
+            webVisibility = webViewContainer.visibility,
+            qmsVisibility = webViewController.contentVisibility()
+        )
+    }
+
+    /**
+     * Debug-only proof line for the layout pass. It is posted once, after the
+     * pass runs, because the page's height is only the new mode's once it has
+     * been measured and laid out.
+     */
+    private fun logMediaLayoutOnMain(mode: MediaMode) {
+        if (!BuildConfig.DEBUG) return
+        mediaContainer.post { logMediaLayout(mode) }
+    }
+
+    private fun logMediaLayout(mode: MediaMode) {
+        val page = if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null
+        val pageState = if (page == null) "absent" else "${visibilityName(page.visibility)} h=${page.height}"
+        val via = if (::mediaController.isInitialized) mediaController.modeVia() else "default"
+        SafeLog.d(
+            TAG,
+            "media layout mode=${mode.wire} via=$via " +
+                "webviewContainer=${visibilityName(webViewContainer.visibility)} " +
+                "mediaWeb=$pageState focus=${focusOwner()}"
+        )
+    }
+
+    private fun visibilityName(visibility: Int): String = when (visibility) {
+        View.VISIBLE -> "VISIBLE"
+        View.INVISIBLE -> "INVISIBLE"
+        else -> "GONE"
+    }
+
+    /** Which view holds focus, named without any page content. */
+    private fun focusOwner(): String {
+        val focused = currentFocus ?: return "none"
+        val mediaPage = if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null
+        return when {
+            focused === mediaPage -> "media_web"
+            focused is WebView -> "qms_web"
+            focused === mediaContainer -> "media_container"
+            else -> focused.javaClass.simpleName
+        }
+    }
+
+    /**
+     * Assertion-style guard for the invariant "a layout apply in `MEDIA_ONLY`
+     * leaves the QMS surface `GONE`". A late callback re-showing it is repaired
+     * rather than thrown: a kiosk must not crash into a black screen over a
+     * stale visibility bit. The debug line above records the state either way.
+     */
+    private fun assertQmsHiddenInMediaOnly(mode: MediaMode) {
+        if (!MediaWebPolicy.hidesQmsSurface(mode)) return
+        val containerHidden = webViewContainer.visibility == View.GONE
+        val pageHidden = webViewController.contentVisibility() != View.VISIBLE
+        if (containerHidden && pageHidden) return
+        SafeLog.w(TAG, "QMS surface was left visible in MEDIA_ONLY; hiding it")
+        webViewContainer.visibility = View.GONE
+        webViewController.setContentVisible(false)
     }
 
     // ---------------------------------------------------------------------
@@ -1285,7 +1563,15 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun handleMediaKey(event: KeyEvent): Boolean {
         val key = mediaKeyFor(event.keyCode)
         val mode = mediaController.currentMode()
-        if (!MediaKeyGuard.shouldSwallow(mode, anyOverlayVisible(), key)) return false
+        if (!MediaKeyGuard.shouldSwallow(
+                mode,
+                anyOverlayVisible(),
+                mediaController.isWebSource(),
+                key
+            )
+        ) {
+            return false
+        }
         // Act once, on the release; the press itself is still consumed.
         if (event.action != KeyEvent.ACTION_UP) return true
         when (key) {
@@ -1294,7 +1580,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             MediaKey.PAUSE -> mediaController.pause()
             MediaKey.NEXT -> mediaController.next()
             MediaKey.PREVIOUS -> mediaController.previous()
-            // The WebView is hidden, so the press has nowhere else to go.
+            // Only a native band item reaches here (the guard never swallows a
+            // D-pad key while a web page is active), and it has nothing to
+            // navigate.
             MediaKey.DPAD, MediaKey.ENTER -> Unit
             MediaKey.MENU, MediaKey.OTHER -> return false
         }
@@ -1337,9 +1625,105 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             errorOverlay.visibility == View.VISIBLE ||
             deviceOverlay.visibility == View.VISIBLE
 
+    /**
+     * Whether the media band's web page owns the D-pad/ENTER keys: media mode
+     * is on, the band is full screen in `MEDIA_ONLY`, the page is the source,
+     * and no overlay is layered above it.
+     *
+     * A page-owned fullscreen view does not make this false. That view is a
+     * plain `View` supplied by Chromium; it is not a key target of its own, so
+     * the keys must still reach the page's WebView, which is `GONE` behind the
+     * view while it is up. [ensureMediaPageFocus] handles that case separately
+     * because an invisible view cannot take focus.
+     */
+    private fun mediaPageOwnsKeys(): Boolean =
+        MediaKeyRoute.route(
+            MediaKey.DPAD,
+            mediaController.currentMode(),
+            mediaController.isWebSource(),
+            anyOverlayVisible()
+        ) == KeyTarget.MEDIA
+
+    /**
+     * Keeps the media page as the focused view before a key is routed. Focus is
+     * only a fallback for the first key after a transition: the device has been
+     * observed reporting focus on the page while the page still never saw the
+     * D-pad, so [dispatchKeyEvent] also dispatches directly to the WebView.
+     *
+     * A page-owned fullscreen view covers the band and the WebView is `GONE`:
+     * `requestFocus()` cannot land on it, and the direct dispatch does not need
+     * focus, so it is skipped there.
+     */
+    private fun ensureMediaPageFocus() {
+        if (!::mediaWebSurface.isInitialized) return
+        if (!mediaPageOwnsKeys()) return
+        if (mediaFullscreenView != null) return
+        if (!mediaWebSurface.hasPageFocus()) mediaController.refocusWeb()
+    }
+
+    /**
+     * Debug-only, content-free record of how a key was routed. It never logs the
+     * URL or the key's character; the enum name and the two booleans are enough
+     * to tell "the guard took it" from "the page took it" in `adb logcat`.
+     */
+    private fun logMediaKeyDispatch(
+        event: KeyEvent,
+        key: MediaKey,
+        guardSwallowed: Boolean,
+        directResult: Boolean? = null
+    ) {
+        if (!BuildConfig.DEBUG) return
+        SafeLog.d(
+            TAG,
+            "media key=${key.name} action=${event.action} " +
+                "mediaOnly=${mediaController.currentMode() == MediaMode.MEDIA_ONLY} " +
+                "web=${mediaController.isWebSource()} guard=$guardSwallowed " +
+                "direct=${directResult?.toString() ?: "n/a"}"
+        )
+    }
+
     /** The four overlays (and dialogs) are independent; derive one pause bit from them. */
     private fun syncMediaOverlay() {
         mediaController.overlay(anyOverlayVisible())
+        syncPointer()
+    }
+
+    /** The pointer is only drawn while the media page owns the keys. */
+    private fun syncPointer() {
+        if (::mediaPointer.isInitialized) mediaPointer.sync(mediaPageOwnsKeys())
+    }
+
+    /**
+     * OK on a media page acts on release, so a long press can toggle the
+     * pointer without the page first seeing a press. The hold is measured from
+     * the gesture's own downTime, like Back, so remotes without auto-repeat
+     * work too. Returns true; the event is always consumed.
+     */
+    private fun handleMediaPageOk(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            // Remotes with auto-repeat flag the hold; toggle right away.
+            if (event.isLongPress && !okLongPressed) {
+                okLongPressed = true
+                mediaPointer.toggle(mediaPageOwnsKeys())
+            }
+            return true
+        }
+        if (okLongPressed) {
+            okLongPressed = false
+            return true
+        }
+        if (event.action != KeyEvent.ACTION_UP || event.isCanceled) return true
+        when {
+            // Remotes without auto-repeat: measure the hold on release.
+            BackOrder.isLongPress(event.downTime, event.eventTime, backLongPressMs) ->
+                mediaPointer.toggle(mediaPageOwnsKeys())
+            mediaPointer.isOn -> mediaPointer.click()
+            else -> mediaWebSurface.view?.let { page ->
+                page.dispatchKeyEvent(KeyEvent(event.downTime, event.downTime, KeyEvent.ACTION_DOWN, event.keyCode, 0))
+                page.dispatchKeyEvent(event)
+            }
+        }
+        return true
     }
 
     @Suppress("DEPRECATION")
@@ -1354,7 +1738,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         }
         // Media keys are consumed before the WebView (and before Back, which is
         // not in the media key set) when the current mode owns them.
-        if (handleMediaKey(event)) return true
+        val mediaKey = mediaKeyFor(event.keyCode)
+        if (handleMediaKey(event)) {
+            logMediaKeyDispatch(event, mediaKey, guardSwallowed = true)
+            return true
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
             event.keyCode == KeyEvent.KEYCODE_BACK
         ) {
@@ -1387,6 +1775,27 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 else -> return true
             }
         }
+        // A media page in MEDIA_ONLY does not reliably receive keys through
+        // window focus: on the device the WebView reports focus yet never sees
+        // the D-pad. Hand DPAD/ENTER to it directly, for both the press and the
+        // release, and consume the event even when the page ignores it so it
+        // cannot fall through to the hidden QMS page or the band container.
+        // This also covers the page-owned fullscreen view: the keys still go to
+        // the WebView, which is hidden behind that view.
+        if ((mediaKey == MediaKey.DPAD || mediaKey == MediaKey.ENTER) &&
+            mediaPageOwnsKeys()
+        ) {
+            ensureMediaPageFocus()
+            if (mediaKey == MediaKey.ENTER) return handleMediaPageOk(event)
+            if (mediaPointer.isOn) {
+                if (event.action == KeyEvent.ACTION_DOWN) mediaPointer.move(event.keyCode, event.repeatCount)
+                return true
+            }
+            val direct = mediaWebSurface.view?.dispatchKeyEvent(event) == true
+            logMediaKeyDispatch(event, mediaKey, guardSwallowed = false, directResult = direct)
+            return true
+        }
+        ensureMediaPageFocus()
         return super.dispatchKeyEvent(event)
     }
 
@@ -1462,6 +1871,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // The page is paused visually, not in the media sense: it must keep
         // running behind the fullscreen video.
         mediaWebSurface.hideForFullscreen()
+        // Keep the pointer above the new view.
+        syncPointer()
         return true
     }
 
@@ -1697,11 +2108,107 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         )
     }
 
-    override fun dpad(key: String): ApiResult {
+    /**
+     * Routes `POST /api/dpad` through [MediaKeyRoute], the same predicate the
+     * hardware remote uses. `back` is not a direction key and deliberately
+     * keeps going through [WebViewController.dispatchDpad] so it still ends at
+     * the unchanged `onRemoteBack()` ladder.
+     */
+    private fun routeSyntheticDpad(key: String): ApiResult {
+        val mediaKey = dpadMediaKey(key)
+        val mode = mediaController.currentMode()
+        val webActive = mediaController.isWebSource()
+        if (mediaKey != null) {
+            val target = MediaKeyRoute.route(
+                mediaKey,
+                mode,
+                webActive,
+                anyOverlayVisible()
+            )
+            // Invariant: while MEDIA_ONLY has a web page on screen the QMS view
+            // must never receive a synthetic key. The route guarantees it; this
+            // explicit guard turns a regression into a dropped key and one log
+            // line instead of a second WebView acting on it.
+            if (target == KeyTarget.QMS && mode == MediaMode.MEDIA_ONLY && webActive) {
+                if (!qmsSyntheticKeyGuardLogged) {
+                    qmsSyntheticKeyGuardLogged = true
+                    SafeLog.e(
+                        TAG,
+                        "Dropped synthetic QMS key in MEDIA_ONLY with a web source"
+                    )
+                }
+                return ApiResult.ok()
+            }
+            when (target) {
+                KeyTarget.MEDIA -> return injectDpad(key)
+                KeyTarget.NONE -> return ApiResult.ok()
+                KeyTarget.QMS -> Unit
+            }
+        }
         return when (val outcome = webViewController.dispatchDpad(key)) {
             is WebViewController.Outcome.Ok -> ApiResult.ok()
-            is WebViewController.Outcome.Error -> ApiResult.badRequest(outcome.code, outcome.message)
+            is WebViewController.Outcome.Error ->
+                ApiResult.badRequest(outcome.code, outcome.message)
         }
+    }
+
+    private fun dpadMediaKey(key: String): MediaKey? = when (key.lowercase()) {
+        "up", "down", "left", "right" -> MediaKey.DPAD
+        "ok" -> MediaKey.ENTER
+        else -> null
+    }
+
+    private fun dpadKeyCode(key: String): Int? = when (key.lowercase()) {
+        "up" -> KeyEvent.KEYCODE_DPAD_UP
+        "down" -> KeyEvent.KEYCODE_DPAD_DOWN
+        "left" -> KeyEvent.KEYCODE_DPAD_LEFT
+        "right" -> KeyEvent.KEYCODE_DPAD_RIGHT
+        "ok" -> KeyEvent.KEYCODE_DPAD_CENTER
+        else -> null
+    }
+
+    /**
+     * Runs the controller's key through [dispatchKeyEvent], the same routing
+     * as the hardware remote, so it reaches the page or the pointer.
+     *
+     * It cannot reach the system on-screen keyboard: that needs real input
+     * injection, which Android reserves for INJECT_EVENTS (tested on API 34).
+     */
+    private fun injectDpad(key: String): ApiResult {
+        val code = dpadKeyCode(key)
+            ?: return ApiResult.badRequest("bad_key", "Unknown D-pad key")
+        val now = SystemClock.uptimeMillis()
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+        return ApiResult.ok()
+    }
+
+    override fun dpad(key: String): ApiResult =
+        MainThreadBridge.runOnMain { it.routeSyntheticDpad(key) }
+            ?: ApiResult.unavailable()
+
+    override fun typeText(text: String, submit: Boolean): ApiResult =
+        MainThreadBridge.runOnMain { it.typeIntoMediaPage(text, submit) }
+            ?: ApiResult.unavailable()
+
+    /**
+     * Types into the media page's focused text box. Enter is a real key event
+     * sent after the text lands (a script-made Enter is not trusted by pages),
+     * and only when a text box actually took the text.
+     */
+    private fun typeIntoMediaPage(text: String, submit: Boolean): ApiResult {
+        if (!mediaPageOwnsKeys()) {
+            return ApiResult.conflict("no_page", "Open a web page in media mode first")
+        }
+        val page = mediaWebSurface.view ?: return ApiResult.unavailable()
+        page.evaluateJavascript(MediaText.script(text)) { typed ->
+            if (submit && typed == "true") {
+                val now = SystemClock.uptimeMillis()
+                page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0))
+                page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0))
+            }
+        }
+        return ApiResult.ok()
     }
 
     override fun setDeviceName(name: String): ApiResult {
@@ -2037,6 +2544,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
 
     private companion object {
         const val TAG = "MainActivity"
+        const val REQUEST_MEDIA_READ = 41
 
         /**
          * Last-resort metrics for when the main-thread hop times out: the

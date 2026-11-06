@@ -160,6 +160,25 @@ class WebViewController(
         dispatch { webView?.requestFocus() }
     }
 
+    /**
+     * Shows or hides the page without unloading it. `MEDIA_ONLY` gives the
+     * media band the whole screen, so the QMS page must be `GONE` as well as
+     * its container: a merely covered page can still be laid out at the Split
+     * height and still be a focus target. Any other mode shows it again.
+     *
+     * The container stays the layout owner; this only clears the page's own
+     * visibility so a mode change leaves nothing of it on screen.
+     */
+    fun setContentVisible(visible: Boolean) {
+        dispatch {
+            webView?.visibility = if (visible) View.VISIBLE else View.GONE
+            true
+        }
+    }
+
+    /** The page's own visibility; `GONE` when it does not exist. Any thread. */
+    fun contentVisibility(): Int = dispatch { webView?.visibility ?: View.GONE } ?: View.GONE
+
     /** Pauses page timers/media when the Activity is backgrounded; any thread. */
     fun pause() {
         dispatch { webView?.onPause() }

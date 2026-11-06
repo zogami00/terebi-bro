@@ -77,6 +77,8 @@ data class MediaSettings(
     val historyCardMaxPx: Int = 320,
     val uiLanguage: UiLanguage = UiLanguage.MS,
     val mediaLocalEnabled: Boolean = true,
+    /** Folder the local source plays: blank = app storage (uploads), else an absolute path on the TV or a USB/SD volume. */
+    val mediaLocalFolder: String = "",
     val playlistEnabled: Boolean = false,
     val playlistUrl: String = "",
     val playlistRefreshSec: Int = 300,
