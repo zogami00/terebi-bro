@@ -376,7 +376,7 @@ class QmsStripCssTest {
         assertTrue("location rule missing", locationRule != null)
         assertTrue(
             "location keeps its fixed width",
-            locationRule!!.groupValues[1].contains("width: auto !important;")
+            locationRule!!.groupValues[1].contains("width: min-content !important;")
         )
         assertTrue(locationRule.groupValues[1].contains("min-width: 0 !important;"))
     }
@@ -647,18 +647,32 @@ class QmsStripCssTest {
         assertNotNull("label rule missing at renderScale 2", atTwoCard)
         assertTrue(atTwoCard!!.groupValues[1].contains("top: 6px !important;"))
 
-        // The pill keeps its two-line clamp and centres itself in the card.
+        // The pill hugs its text, centres itself in the card and its row, and
+        // puts each word on its own line ("Kaunter" over "11").
         val location = "$card ${settings.qmsLocationSelector}"
         val locationRule = Regex("(?m)^" + Regex.escape(location) + " \\{([^}]*)\\}").find(atOne)
         assertNotNull("location rule missing", locationRule)
         val locationBody = locationRule!!.groupValues[1]
-        assertTrue(locationBody.contains("display: -webkit-box !important;"))
-        assertTrue(locationBody.contains("-webkit-line-clamp: 2 !important;"))
+        // A block container: `::first-line` does not apply to flex or -webkit-box.
+        assertTrue(locationBody.contains("display: block !important;"))
+        assertTrue(locationBody.contains("word-spacing: 100vw !important;"))
+        assertTrue(locationBody.contains("width: min-content !important;"))
+        assertTrue(locationBody.contains("height: auto !important;"))
+        assertTrue(locationBody.contains("align-self: center !important;"))
         assertTrue(locationBody.contains("text-align: center !important;"))
-        assertTrue(locationBody.contains("-webkit-box-pack: center !important;"))
-        assertTrue(locationBody.contains("justify-content: center !important;"))
         assertTrue(locationBody.contains("margin-left: auto !important;"))
         assertTrue(locationBody.contains("margin-right: auto !important;"))
+    }
+
+    @Test
+    fun `the location word is smaller than its number`() {
+        val card = "html[${QmsStripCss.attribute()}] ${settings.qmsStripSelector} > section > div > div"
+        val location = "$card ${settings.qmsLocationSelector}"
+        fun fontPx(body: String) = Regex("font-size: (\\d+)px").find(body)!!.groupValues[1].toInt()
+        val pill = Regex("(?m)^" + Regex.escape(location) + " \\{([^}]*)\\}").find(atOne)!!.groupValues[1]
+        val word = Regex(Regex.escape("$location::first-line") + " \\{([^}]*)\\}").find(atOne)
+        assertNotNull("first-line rule missing", word)
+        assertTrue(fontPx(word!!.groupValues[1]) < fontPx(pill))
     }
 
     @Test

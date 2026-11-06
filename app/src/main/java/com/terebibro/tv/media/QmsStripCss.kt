@@ -59,6 +59,10 @@ object QmsStripCss {
     private const val CURRENT_NUMBER_RATIO = 0.32
     private const val HISTORY_NUMBER_RATIO = 0.22
     private const val LOCATION_RATIO = 0.11
+
+    /** The location kind ("Kaunter") and its number, as multiples of the location size. */
+    private const val LOCATION_WORD_SCALE = 0.8
+    private const val LOCATION_NUMBER_SCALE = 1.45
     private const val TIME_RATIO = 0.065
     private const val LABEL_RATIO = 0.055
 
@@ -151,6 +155,10 @@ object QmsStripCss {
             settings.historyNumberPx / HISTORY_NUMBER_BASE
         )
         val locationSize = fromQueue(LOCATION_RATIO, settings.labelPx / LABEL_BASE)
+        val locationWordSize = (locationSize * LOCATION_WORD_SCALE).roundToInt()
+        val locationNumberSize = (locationSize * LOCATION_NUMBER_SCALE).roundToInt()
+        // Two lines (word at line-height 1.1, number at 1) plus the 3 + 4 px padding.
+        val locationMaxHeight = (locationWordSize * 1.1 + locationNumberSize + 7).roundToInt()
         val timeSize = fromQueue(TIME_RATIO, settings.labelPx / LABEL_BASE)
         val labelSize = fromQueue(LABEL_RATIO, settings.labelPx / LABEL_BASE)
 
@@ -405,35 +413,49 @@ object QmsStripCss {
             max-height: 1.15em !important;
         """.trimIndent()
 
-        // A long room name wraps to two lines instead of being cut with an
-        // ellipsis: an abbreviated counter is a wrong counter. An unspaced value
-        // breaks mid-word rather than being clipped at the card edge. The
-        // vendor's `w-44`/`w-64`/`w-96` resolves wider than the card itself, so
-        // the fixed width is cancelled and the pill sizes to the card.
-        //
-        // `display: -webkit-box` replaces the vendor's flex centring, so the
-        // text is centred explicitly: `text-align` centres each line,
-        // `-webkit-box-pack` centres the line boxes, and the auto side margins
-        // centre a pill narrower than the card.
+        // The location reads as a two-level label, the kind ("Kaunter",
+        // "Bilik") small on top and the number large below it, centred in a
+        // pill that hugs the text. CSS alone, so the vendor DOM and the call
+        // key are untouched:
+        // - the huge `word-spacing` puts every word on its own line;
+        // - `::first-line` shrinks the first word, the rest keep the large size;
+        // - `width: min-content` sizes the pill to its longest word (the spaces
+        //   are break points, so they never widen it), and `height: auto` with
+        //   `align-self: center` drops the vendor's fixed pill height that left
+        //   the text stuck at the top of a taller box.
+        // A block (not flex or -webkit-box) is required: `::first-line` only
+        // applies to block containers. An unspaced value still breaks
+        // mid-word rather than being clipped at the card edge.
+        // ponytail: a three-word name ("Bilik Rawatan 2") becomes three lines and
+        // is clipped at max-height; split the trailing number in QmsScript if
+        // such names appear.
         rules += locationOnCard to """
-            display: -webkit-box !important;
-            -webkit-box-orient: vertical !important;
-            -webkit-line-clamp: 2 !important;
+            display: block !important;
             white-space: normal !important;
+            word-spacing: 100vw !important;
             overflow: hidden !important;
             overflow-wrap: break-word !important;
             word-wrap: break-word !important;
-            width: auto !important;
+            width: min-content !important;
             min-width: 0 !important;
             max-width: 100% !important;
-            padding: 0 ${px(10)} !important;
-            line-height: 1.15 !important;
-            font-size: ${px(locationSize)} !important;
+            height: auto !important;
+            min-height: 0 !important;
+            max-height: ${px(locationMaxHeight)} !important;
+            align-self: center !important;
+            padding: ${px(3)} ${px(10)} ${px(4)} !important;
+            line-height: 1 !important;
+            font-size: ${px(locationNumberSize)} !important;
+            font-weight: 700 !important;
             text-align: center !important;
-            -webkit-box-pack: center !important;
-            justify-content: center !important;
             margin-left: auto !important;
             margin-right: auto !important;
+        """.trimIndent()
+
+        rules += "$locationOnCard::first-line" to """
+            font-size: ${px(locationWordSize)} !important;
+            font-weight: 500 !important;
+            line-height: 1.1 !important;
         """.trimIndent()
 
         rules += timeOnCard to """
