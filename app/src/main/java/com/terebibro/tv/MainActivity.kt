@@ -44,6 +44,7 @@ import com.terebibro.tv.media.MediaKeyRoute
 import com.terebibro.tv.media.MediaLayout
 import com.terebibro.tv.media.MediaMode
 import com.terebibro.tv.media.MediaPlayerHost
+import com.terebibro.tv.media.MediaPointer
 import com.terebibro.tv.media.MediaSettings
 import com.terebibro.tv.media.MediaStore
 import com.terebibro.tv.media.MediaWebSurface
@@ -125,6 +126,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var menuMediaWebButton: Button
     private lateinit var menuMediaModeButton: Button
     private lateinit var menuMediaKeyboardButton: Button
+    private lateinit var menuMediaPointerButton: Button
     private lateinit var menuMediaBanner: TextView
     private lateinit var menuSettingsButton: Button
     private lateinit var menuDeviceButton: Button
@@ -140,6 +142,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private lateinit var webViewController: WebViewController
     private lateinit var mediaStore: MediaStore
     private lateinit var mediaWebSurface: MediaWebSurface
+    private lateinit var mediaPointer: MediaPointer
+    /** True once the current OK hold has toggled the pointer. */
+    private var okLongPressed = false
     private lateinit var mediaController: MediaController
     private lateinit var auth: AuthManager
     private lateinit var wsHub: WsHub
@@ -273,6 +278,9 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             },
             fullscreenHost = this
         )
+        mediaPointer = MediaPointer(mediaContainer) {
+            mediaFullscreenView ?: mediaWebSurface.view
+        }
         mediaController = MediaController(
             mediaStore,
             { config.mediaSettings },
@@ -544,6 +552,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaWebButton = findViewById(R.id.menu_media_web)
         menuMediaModeButton = findViewById(R.id.menu_media_mode)
         menuMediaKeyboardButton = findViewById(R.id.menu_media_keyboard)
+        menuMediaPointerButton = findViewById(R.id.menu_media_pointer)
         menuMediaBanner = findViewById(R.id.menu_media_banner)
         menuSettingsButton = findViewById(R.id.menu_settings)
         menuDeviceButton = findViewById(R.id.menu_device_info)
@@ -601,6 +610,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         menuMediaWebButton.setOnClickListener { showMediaWebDialog() }
         menuMediaModeButton.setOnClickListener { cycleMediaMode() }
         menuMediaKeyboardButton.setOnClickListener { showMediaKeyboard() }
+        menuMediaPointerButton.setOnClickListener {
+            hideMenu()
+            mediaPointer.toggle(mediaPageOwnsKeys())
+        }
         menuSettingsButton.setOnClickListener {
             hideMenu()
             showInfoOverlay(issueNewPin = auth.currentPin() == null)
@@ -1002,6 +1015,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             View.GONE
         }
         menuMediaKeyboardButton.visibility = keyboardVisibility
+        menuMediaPointerButton.visibility = keyboardVisibility
     }
 
     /**
@@ -1155,6 +1169,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // once a second; skipping an identical pass keeps LayoutParams, the
         // band page's layout and the focus target untouched, so a D-pad
         // selection in the page survives between presses.
+        syncPointer()
         val layoutKey = mediaLayoutKey(mode)
         if (layoutKey == appliedMediaLayout) return
         val mediaParams = mediaContainer.layoutParams as FrameLayout.LayoutParams
@@ -1571,6 +1586,45 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     /** The four overlays (and dialogs) are independent; derive one pause bit from them. */
     private fun syncMediaOverlay() {
         mediaController.overlay(anyOverlayVisible())
+        syncPointer()
+    }
+
+    /** The pointer is only drawn while the media page owns the keys. */
+    private fun syncPointer() {
+        if (::mediaPointer.isInitialized) mediaPointer.sync(mediaPageOwnsKeys())
+    }
+
+    /**
+     * OK on a media page acts on release, so a long press can toggle the
+     * pointer without the page first seeing a press. The hold is measured from
+     * the gesture's own downTime, like Back, so remotes without auto-repeat
+     * work too. Returns true; the event is always consumed.
+     */
+    private fun handleMediaPageOk(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            // Remotes with auto-repeat flag the hold; toggle right away.
+            if (event.isLongPress && !okLongPressed) {
+                okLongPressed = true
+                mediaPointer.toggle(mediaPageOwnsKeys())
+            }
+            return true
+        }
+        if (okLongPressed) {
+            okLongPressed = false
+            return true
+        }
+        if (event.action != KeyEvent.ACTION_UP || event.isCanceled) return true
+        when {
+            // Remotes without auto-repeat: measure the hold on release.
+            BackOrder.isLongPress(event.downTime, event.eventTime, backLongPressMs) ->
+                mediaPointer.toggle(mediaPageOwnsKeys())
+            mediaPointer.isOn -> mediaPointer.click()
+            else -> mediaWebSurface.view?.let { page ->
+                page.dispatchKeyEvent(KeyEvent(event.downTime, event.downTime, KeyEvent.ACTION_DOWN, event.keyCode, 0))
+                page.dispatchKeyEvent(event)
+            }
+        }
+        return true
     }
 
     @Suppress("DEPRECATION")
@@ -1633,6 +1687,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
             mediaPageOwnsKeys()
         ) {
             ensureMediaPageFocus()
+            if (mediaKey == MediaKey.ENTER) return handleMediaPageOk(event)
+            if (mediaPointer.isOn) {
+                if (event.action == KeyEvent.ACTION_DOWN) mediaPointer.move(event.keyCode, event.repeatCount)
+                return true
+            }
             val direct = mediaWebSurface.view?.dispatchKeyEvent(event) == true
             logMediaKeyDispatch(event, mediaKey, guardSwallowed = false, directResult = direct)
             return true
@@ -1713,6 +1772,8 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         // The page is paused visually, not in the media sense: it must keep
         // running behind the fullscreen video.
         mediaWebSurface.hideForFullscreen()
+        // Keep the pointer above the new view.
+        syncPointer()
         return true
     }
 
@@ -1980,7 +2041,7 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 return ApiResult.ok()
             }
             when (target) {
-                KeyTarget.MEDIA -> return dispatchDpadToMediaPage(key)
+                KeyTarget.MEDIA -> return injectDpad(key)
                 KeyTarget.NONE -> return ApiResult.ok()
                 KeyTarget.QMS -> Unit
             }
@@ -2008,17 +2069,18 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     }
 
     /**
-     * Delivers both the press and the release to the media band's page. The QMS
-     * view is not consulted, so one key cannot reach two WebViews.
+     * Runs the controller's key through [dispatchKeyEvent], the same routing
+     * as the hardware remote, so it reaches the page or the pointer.
+     *
+     * It cannot reach the system on-screen keyboard: that needs real input
+     * injection, which Android reserves for INJECT_EVENTS (tested on API 34).
      */
-    private fun dispatchDpadToMediaPage(key: String): ApiResult {
+    private fun injectDpad(key: String): ApiResult {
         val code = dpadKeyCode(key)
             ?: return ApiResult.badRequest("bad_key", "Unknown D-pad key")
-        val page = (if (::mediaWebSurface.isInitialized) mediaWebSurface.view else null)
-            ?: return ApiResult.unavailable()
         val now = SystemClock.uptimeMillis()
-        page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
-        page.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, code, 0))
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, code, 0))
         return ApiResult.ok()
     }
 

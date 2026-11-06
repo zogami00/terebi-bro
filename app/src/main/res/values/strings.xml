@@ -28,6 +28,7 @@
     <string name="menu_media_web">Open web in media</string>
     <string name="menu_media_mode">Media mode</string>
     <string name="menu_media_keyboard">Show keyboard</string>
+    <string name="menu_media_pointer">Pointer on / off (or hold OK)</string>
     <string name="menu_media_keyboard_unavailable">No on-screen keyboard is available on this device. Use Jellyfin Quick Connect or a USB/Bluetooth keyboard.</string>
     <string name="media_placeholder">No media</string>
     <string name="enter_url_title">Enter URL</string>

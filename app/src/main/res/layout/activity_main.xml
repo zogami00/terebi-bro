@@ -363,6 +363,14 @@
                 android:text="@string/menu_media_keyboard" />
 
             <Button
+                android:id="@+id/menu_media_pointer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="@string/menu_media_pointer" />
+
+            <Button
                 android:id="@+id/menu_settings"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
