@@ -22,6 +22,9 @@
   var bannerTimer = null;
   var networks = [];
   var mqttPasswordSet = false;
+  var mediaPaused = false;
+  var activeTab = 'now';
+  var savedTimers = {};
 
   function $(id) { return document.getElementById(id); }
 
@@ -68,6 +71,93 @@
     return 'Request failed (' + result.status + ')';
   }
 
+  /* -------------------------------------------------------------------- tabs */
+
+  var TAB_KEY = 'terebi.tab';
+  var TAB_NAMES = ['now', 'content', 'display', 'device'];
+
+  function tabButton(name) { return $('tab-' + name); }
+  function tabPanel(name) { return $('panel-' + name); }
+
+  /* The tab survives a reload but not a new browsing session. sessionStorage
+     throws when storage is unavailable, so it is only ever best-effort. */
+  function rememberedTab() {
+    try {
+      var saved = sessionStorage.getItem(TAB_KEY);
+      return TAB_NAMES.indexOf(saved) >= 0 ? saved : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* Panels are switched with the existing `hidden` class, so the rest of the
+     page needs to know nothing about tabs. aria-selected and a roving tabindex
+     keep the tablist keyboard-navigable. */
+  function selectTab(name, focusTab) {
+    if (TAB_NAMES.indexOf(name) < 0) name = 'now';
+    activeTab = name;
+    for (var i = 0; i < TAB_NAMES.length; i++) {
+      var n = TAB_NAMES[i];
+      var button = tabButton(n);
+      var panel = tabPanel(n);
+      var on = n === name;
+      if (button) {
+        button.setAttribute('aria-selected', on ? 'true' : 'false');
+        button.tabIndex = on ? 0 : -1;
+        if (on) { button.classList.add('is-active'); } else { button.classList.remove('is-active'); }
+      }
+      if (panel) { if (on) { show(panel); } else { hide(panel); } }
+    }
+    try { sessionStorage.setItem(TAB_KEY, name); } catch (e) { /* storage unavailable */ }
+    if (focusTab) {
+      var target = tabButton(name);
+      if (target) target.focus();
+    }
+    if (name === 'display') updateBandTotal();
+  }
+
+  function tabKeyDown(event) {
+    var index = TAB_NAMES.indexOf(activeTab);
+    if (index < 0) index = 0;
+    var next = index;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      next = (index + 1) % TAB_NAMES.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      next = (index - 1 + TAB_NAMES.length) % TAB_NAMES.length;
+    } else if (event.key === 'Home') {
+      next = 0;
+    } else if (event.key === 'End') {
+      next = TAB_NAMES.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    selectTab(TAB_NAMES[next], true);
+  }
+
+  function flashSaved(id, text) {
+    var el = $(id);
+    if (!el) return;
+    el.textContent = text || 'Saved';
+    if (savedTimers[id]) clearTimeout(savedTimers[id]);
+    savedTimers[id] = setTimeout(function () { el.textContent = ''; }, 4000);
+  }
+
+  function setSectionError(id, message) {
+    var el = $(id);
+    if (el) el.textContent = message || '';
+  }
+
+  /* Destructive actions always ask first. window.confirm is used rather than a
+     custom dialog so the browser handles focus and Escape. */
+  function confirmAction(message) {
+    try {
+      return window.confirm(message);
+    } catch (e) {
+      return false;
+    }
+  }
+
   /* ---------------------------------------------------------------- pairing */
 
   function pair() {
@@ -95,6 +185,7 @@
     socket = null;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     hide($('mainScreen'));
+    hide($('tabbar'));
     show($('pairingScreen'));
     setOnline(false);
   }
@@ -188,6 +279,7 @@
     if (message.type === 'auth_ok') {
       hide($('pairingScreen'));
       show($('mainScreen'));
+      show($('tabbar'));
       if (message.state) updateState(message.state);
       refreshDevice();
       refreshNetworks();
@@ -283,6 +375,78 @@
     if (keepAwake && document.activeElement !== keepAwake) keepAwake.checked = !!state.keepAwake;
     if (state.mediaMode) setMediaModeLine(state.mediaMode);
     if (state.mediaSource !== undefined) setMediaSourceLine(state);
+    setNowPanel(state);
+    setText('infoUptime', formatUptime(state.uptimeMs));
+  }
+
+  var SOURCE_LABELS = {
+    local: 'Folder on the TV',
+    playlist: 'Web playlist',
+    url: 'A web address',
+    web: 'A web page'
+  };
+
+  function sourceLabel(state) {
+    var key = state.mediaSource ? String(state.mediaSource) : '';
+    if (!key) return 'Nothing yet';
+    return SOURCE_LABELS[key] || key;
+  }
+
+  function formatUptime(ms) {
+    var total = Math.floor((Number(ms) || 0) / 1000);
+    if (total <= 0) return '';
+    var days = Math.floor(total / 86400);
+    var hours = Math.floor((total % 86400) / 3600);
+    var minutes = Math.floor((total % 3600) / 60);
+    if (days > 0) return days + ' d ' + hours + ' h';
+    if (hours > 0) return hours + ' h ' + minutes + ' m';
+    return minutes + ' m';
+  }
+
+  function setPlayPauseLabel() {
+    var button = $('mediaPlayPause');
+    if (!button) return;
+    button.textContent = mediaPaused ? 'Play' : 'Pause';
+  }
+
+  /* The "Now" tab is a read-only summary of the state broadcast. Server text
+     only ever reaches the DOM through textContent. */
+  function setNowPanel(state) {
+    var number = String(state.qmsNow || '').trim();
+    setText('nowNumber', number ? number : 'Nothing called yet');
+    setText('nowLocation', String(state.qmsLocation || '').trim());
+
+    var item = String(state.mediaItem || '').trim();
+    var count = Number(state.mediaCount) || 0;
+    var index = Number(state.mediaIndex) || 0;
+    if (!state.mediaEnabled) {
+      setText('nowMedia', 'The media screen is off');
+    } else if (item) {
+      var position = count > 1 && index >= 0 ? ' (' + (index + 1) + ' of ' + count + ')' : '';
+      setText('nowMedia', item + position);
+    } else if (state.mediaSource === 'web') {
+      setText('nowMedia', 'A web page');
+    } else {
+      setText('nowMedia', 'Nothing playing');
+    }
+    setText('nowSource', sourceLabel(state));
+
+    var mediaError = String(state.mediaError || '').trim();
+    var errorEl = $('nowMediaError');
+    if (errorEl) {
+      errorEl.textContent = mediaError;
+      if (mediaError) { show(errorEl); } else { hide(errorEl); }
+    }
+
+    mediaPaused = !!state.mediaPaused;
+    setPlayPauseLabel();
+
+    // The queue board is only meaningful when the media screen is on; hiding
+    // the warning otherwise would claim a healthy board that is not in use.
+    var warning = $('qmsWarning');
+    if (warning) {
+      if (state.mediaEnabled && state.qmsDetectionHealthy === false) { show(warning); } else { hide(warning); }
+    }
   }
 
   function refreshDevice() {
@@ -492,6 +656,7 @@
     api('POST', '/api/settings/mqtt', body).then(function (result) {
       if (result.status === 200 && result.json) {
         $('mqttPasswordInput').value = '';
+        flashSaved('mqttSaved');
         refreshMqtt();
       } else {
         error.textContent = apiError(result);
@@ -522,8 +687,28 @@
     if (el && document.activeElement !== el) el.value = value === undefined || value === null ? '' : String(value);
   }
 
+  var MODE_LABELS = {
+    qms_only: 'Queue board only',
+    qms_focus: 'Queue board only',
+    split: 'Split screen',
+    media_only: 'Media only'
+  };
+
+  /* The header and the Now tab speak plain words; `mediaModeState` keeps the
+     raw wire value for the diagnostics-minded. */
   function setMediaModeLine(mode) {
     setText('mediaModeState', 'Mode: ' + (mode || 'qms_only'));
+    setText('headerMode', MODE_LABELS[mode] || 'Queue board only');
+    var pressed = {
+      mediaModeQms: mode === 'qms_only' || mode === 'qms_focus',
+      mediaModeSplit: mode === 'split',
+      mediaModeMedia: mode === 'media_only'
+    };
+    for (var id in pressed) {
+      if (!Object.prototype.hasOwnProperty.call(pressed, id)) continue;
+      var button = $(id);
+      if (button) button.setAttribute('aria-pressed', pressed[id] ? 'true' : 'false');
+    }
   }
 
   var MEDIA_FIELD_IDS = {
@@ -547,7 +732,10 @@
     playlistRefreshSec: 'playlistRefreshInput',
     mediaWebUrl: 'mediaWebUrlInput',
     mediaWebEnabled: 'mediaWebEnabledToggle',
-    mediaSourceDefault: 'mediaSourceDefaultInput'
+    mediaSourceDefault: 'mediaSourceDefaultInput',
+    currentNumberPx: 'mediaCurrentNumberPxInput',
+    historyNumberPx: 'mediaHistoryNumberPxInput',
+    labelPx: 'mediaLabelPxInput'
   };
 
   function clearMediaFieldErrors() {
@@ -556,23 +744,58 @@
   }
 
   /* The server names the offending field as "field: reason"; place that text
-     directly after the input it belongs to, falling back to the card error. */
-  function showMediaError(message) {
+     directly after the input it belongs to, falling back to the section's own
+     error line. */
+  function showMediaError(message, errorId) {
     clearMediaFieldErrors();
-    var error = $('mediaError');
-    error.textContent = '';
+    var error = $(errorId || 'mediaError');
+    if (error) error.textContent = '';
     var text = message || 'Request failed';
     var match = /^([A-Za-z]+):/.exec(text);
     var id = match ? MEDIA_FIELD_IDS[match[1]] : null;
     var input = id ? $(id) : null;
     if (!input || !input.parentNode) {
-      error.textContent = text;
+      if (error) error.textContent = text;
       return;
     }
     var note = document.createElement('p');
     note.className = 'error media-field-error';
     note.textContent = text;
     input.parentNode.insertBefore(note, input.nextSibling);
+  }
+
+  function intValue(id) {
+    var el = $(id);
+    return el ? (parseInt(el.value, 10) || 0) : 0;
+  }
+
+  /* The band split is a cross-field rule: the three parts must add up to 100.
+     The total is shown live and a save that does not add up is refused before
+     it reaches the server. */
+  function mediaBandTotal() {
+    return intValue('mediaSplitInput') + intValue('mediaHeaderInput') + intValue('mediaStripInput');
+  }
+
+  function updateBandTotal() {
+    setText('splitValue', intValue('mediaSplitInput') + '%');
+    setText('headerValue', intValue('mediaHeaderInput') + '%');
+    setText('stripValue', intValue('mediaStripInput') + '%');
+    var line = $('bandTotalLine');
+    if (!line) return;
+    var total = mediaBandTotal();
+    if (total === 100) {
+      line.textContent = 'Total 100% \u2014 this adds up.';
+      line.classList.remove('bad');
+    } else {
+      line.textContent = 'Total ' + total + '% \u2014 adjust the sliders until they add up to 100%.';
+      line.classList.add('bad');
+    }
+  }
+
+  function updateSizes() {
+    setText('currentNumberPxValue', intValue('mediaCurrentNumberPxInput') + ' px');
+    setText('historyNumberPxValue', intValue('mediaHistoryNumberPxInput') + ' px');
+    setText('labelPxValue', intValue('mediaLabelPxInput') + ' px');
   }
 
   function refreshMedia() {
@@ -608,6 +831,11 @@
       }
       setCheckIfIdle('mediaWebEnabledToggle', d.mediaWebEnabled);
       setSelectIfIdle('mediaSourceDefaultInput', d.mediaSourceDefault);
+      setValueIfIdle('mediaCurrentNumberPxInput', d.currentNumberPx);
+      setValueIfIdle('mediaHistoryNumberPxInput', d.historyNumberPx);
+      setValueIfIdle('mediaLabelPxInput', d.labelPx);
+      updateSizes();
+      updateBandTotal();
       setMediaModeLine(runtime.mode);
       setMediaSourceLine(runtime);
     });
@@ -619,16 +847,18 @@
   function setMediaSourceLine(source) {
     var el = $('mediaSourceState');
     if (!el || !source) return;
-    var name = source.mediaSource ? source.mediaSource : 'none';
+    var name = source.mediaSource
+      ? (SOURCE_LABELS[source.mediaSource] || source.mediaSource)
+      : 'Nothing';
     var count = Number(source.mediaCount) || 0;
     var fetchedMs = Number(source.playlistLastFetchMs) || 0;
     var error = source.playlistLastError;
     // The count is what makes an empty queue obvious without opening the
-    // library: "local · 0 items" beside the "media unavailable" band.
+    // library: "Folder on the TV · 0 items" beside the "unavailable" band.
     var parts = [name + ' \u00b7 ' + count + (count === 1 ? ' item' : ' items')];
     parts.push(fetchedMs > 0
-      ? 'last playlist fetch: ' + Math.round(fetchedMs) + ' ms'
-      : 'playlist not fetched yet');
+      ? 'last checked in ' + Math.round(fetchedMs) + ' ms'
+      : 'not checked yet');
     if (error) parts.push('playlist error: ' + error);
     el.textContent = parts.join(' \u2014 ');
   }
@@ -647,62 +877,119 @@
     if (value !== '') body[key] = value;
   }
 
-  /* The whole media block is one request: a partial update is validated against
-     the merged settings on the server, so the band sum is checked as a whole.
-     Empty inputs are left out rather than sent as null. */
-  function saveMedia() {
-    var error = $('mediaError');
-    error.textContent = '';
+  /* One save per section. Each save sends only the fields its section owns, so
+     an unbalanced band split in Display can never block a Content save (the
+     server validates the merged whole, and an omitted field keeps its stored
+     value). Empty inputs are left out rather than sent as null. */
+  function saveMedia(section) {
+    var target = typeof section === 'string' ? section : 'queue';
+    var errorIds = {
+      queue: 'mediaError',
+      playlist: 'playlistError',
+      display: 'displayError',
+      web: 'mediaWebError',
+      now: 'modeError'
+    };
+    var savedIds = {
+      queue: 'queueSaved',
+      playlist: 'playlistSaved',
+      display: 'displaySaved',
+      web: 'mediaWebSaved'
+    };
+    var errorId = errorIds[target] || 'mediaError';
+    var error = $(errorId);
+    if (error) error.textContent = '';
     clearMediaFieldErrors();
+    var bandError = $('bandError');
+    if (bandError) bandError.textContent = '';
+
+    if (target === 'display') {
+      var total = mediaBandTotal();
+      if (total !== 100) {
+        if (bandError) {
+          bandError.textContent = 'Not saved: the three parts add up to ' +
+            total + '%, and they must add up to 100%.';
+        }
+        updateBandTotal();
+        var split = $('mediaSplitInput');
+        if (split) split.focus();
+        return;
+      }
+    }
+
     var body = { mediaModeEnabled: $('mediaEnabledToggle').checked };
-    putNumber(body, 'mediaSplitPercent', 'mediaSplitInput');
-    putNumber(body, 'headerBandPercent', 'mediaHeaderInput');
-    putNumber(body, 'stripHeightPercent', 'mediaStripInput');
-    putNumber(body, 'dwellSec', 'mediaDwellInput');
-    putNumber(body, 'volumePercent', 'mediaVolumeInput');
-    putNumber(body, 'imageDurationSec', 'mediaImageDurationInput');
-    putNumber(body, 'uiScale', 'mediaUiScaleInput');
-    putString(body, 'mediaFillMode', 'mediaFillModeInput');
-    putString(body, 'uiLanguage', 'mediaLanguageInput');
-    // Selectors are omitted when blank: the server keeps the previous value,
-    // and a blank selector is a named 400 rather than a silent reset.
-    putString(body, 'qmsStripSelector', 'mediaStripSelectorInput');
-    putString(body, 'qmsNumberSelector', 'mediaNumberSelectorInput');
-    putString(body, 'qmsLocationSelector', 'mediaLocationSelectorInput');
-    putString(body, 'qmsTimeSelector', 'mediaTimeSelectorInput');
-    putString(body, 'callSource', 'mediaCallSourceInput');
-    // The QMS URL is always sent, even empty: that is the documented way to
-    // clear a stale URL back to "track the Home URL", exactly like playlistUrl.
-    body.qmsUrl = $('mediaQmsUrlInput').value.trim();
-    // The playlist URL is always sent, not omitted when empty: that is the
-    // documented way to clear a stale URL, and enabling the playlist without
-    // one is a named 400 rather than a silent no-op.
-    body.playlistEnabled = $('playlistEnabledToggle').checked;
-    body.playlistUrl = $('playlistUrlInput').value.trim();
-    putNumber(body, 'playlistRefreshSec', 'playlistRefreshInput');
-    // Leave blank to keep the stored URL: GET only returns it masked, so an
-    // untouched field must not overwrite it. A `web` startup source with no
-    // stored URL is still a named 400.
-    var webUrl = $('mediaWebUrlInput').value.trim();
-    if (webUrl) body.mediaWebUrl = webUrl;
-    body.mediaWebEnabled = $('mediaWebEnabledToggle').checked;
-    body.mediaSourceDefault = $('mediaSourceDefaultInput').value;
+    if (target === 'display') {
+      putNumber(body, 'mediaSplitPercent', 'mediaSplitInput');
+      putNumber(body, 'headerBandPercent', 'mediaHeaderInput');
+      putNumber(body, 'stripHeightPercent', 'mediaStripInput');
+      putNumber(body, 'currentNumberPx', 'mediaCurrentNumberPxInput');
+      putNumber(body, 'historyNumberPx', 'mediaHistoryNumberPxInput');
+      putNumber(body, 'labelPx', 'mediaLabelPxInput');
+      putNumber(body, 'dwellSec', 'mediaDwellInput');
+      putNumber(body, 'volumePercent', 'mediaVolumeInput');
+      putNumber(body, 'imageDurationSec', 'mediaImageDurationInput');
+      putString(body, 'mediaFillMode', 'mediaFillModeInput');
+      putString(body, 'uiLanguage', 'mediaLanguageInput');
+    } else if (target !== 'now') {
+      putNumber(body, 'uiScale', 'mediaUiScaleInput');
+      // Selectors are omitted when blank: the server keeps the previous value,
+      // and a blank selector is a named 400 rather than a silent reset.
+      putString(body, 'qmsStripSelector', 'mediaStripSelectorInput');
+      putString(body, 'qmsNumberSelector', 'mediaNumberSelectorInput');
+      putString(body, 'qmsLocationSelector', 'mediaLocationSelectorInput');
+      putString(body, 'qmsTimeSelector', 'mediaTimeSelectorInput');
+      putString(body, 'callSource', 'mediaCallSourceInput');
+      // The QMS URL is always sent, even empty: that is the documented way to
+      // clear a stale URL back to "track the Home URL", exactly like playlistUrl.
+      body.qmsUrl = $('mediaQmsUrlInput').value.trim();
+      // The playlist URL is always sent, not omitted when empty: that is the
+      // documented way to clear a stale URL, and enabling the playlist without
+      // one is a named 400 rather than a silent no-op.
+      body.playlistEnabled = $('playlistEnabledToggle').checked;
+      body.playlistUrl = $('playlistUrlInput').value.trim();
+      putNumber(body, 'playlistRefreshSec', 'playlistRefreshInput');
+      // Leave blank to keep the stored URL: GET only returns it masked, so an
+      // untouched field must not overwrite it. A `web` startup source with no
+      // stored URL is still a named 400.
+      var webUrl = $('mediaWebUrlInput').value.trim();
+      if (webUrl) body.mediaWebUrl = webUrl;
+      body.mediaWebEnabled = $('mediaWebEnabledToggle').checked;
+      body.mediaSourceDefault = $('mediaSourceDefaultInput').value;
+    }
     api('POST', '/api/settings/media', body).then(function (result) {
       if (result.status === 200 && result.json) {
         clearMediaFieldErrors();
+        if (savedIds[target]) flashSaved(savedIds[target]);
         refreshMedia();
       } else {
-        showMediaError(apiError(result));
+        showMediaError(apiError(result), errorId);
+      }
+    });
+  }
+
+  /* Playback commands exist as REST routes so the controller does not need
+     MQTT to pause or skip a clip. `applied:false` means media mode is off. */
+  function mediaCommand(path) {
+    api('POST', path, {}).then(function (result) {
+      if (result.status >= 400) {
+        banner(apiError(result));
+        return;
+      }
+      if (result.json && result.json.applied === false) {
+        banner('The media screen is off. Turn it on in the Now tab.');
       }
     });
   }
 
   function requestMediaMode(mode) {
+    var error = $('modeError');
+    if (error) error.textContent = '';
     api('POST', '/api/media/mode', { mode: mode }).then(function (result) {
       if (result.status === 200 && result.json) {
         setMediaModeLine(result.json.mode || mode);
       } else {
-        banner(apiError(result));
+        var message = apiError(result);
+        if (error) { error.textContent = message; } else { banner(message); }
       }
     });
   }
@@ -722,6 +1009,7 @@
     api('POST', '/api/media/open', { url: url, web: true }).then(function (result) {
       if (result.status === 200 && result.json) {
         error.textContent = '';
+        flashSaved('mediaWebSaved', 'Opening on the TV\u2026');
       } else {
         error.textContent = apiError(result);
       }
@@ -778,7 +1066,7 @@
     var summary = $('librarySummary');
     if (summary) {
       summary.textContent = libraryFiles.length === 0
-        ? 'No media yet.'
+        ? 'No videos yet \u2014 upload one.'
         : libraryFiles.length + ' file' + (libraryFiles.length === 1 ? '' : 's') + ' in the library.';
     }
     var ul = $('libraryList');
@@ -831,6 +1119,7 @@
   }
 
   function deleteLibraryFile(name) {
+    if (!confirmAction('Delete "' + name + '" from the TV?')) return;
     setUploadError('');
     api('POST', '/api/media/delete', { name: name }).then(function (result) {
       if (result.status === 200 && result.json && result.json.files) {
@@ -988,36 +1277,68 @@
   function saveHomeUrl() {
     var url = $('homeUrlInput').value.trim();
     if (!url) return;
-    runAction('/api/home', { url: url });
+    setSectionError('deviceError', '');
+    runAction('/api/home', { url: url }).then(function (result) {
+      if (result.status < 400) { flashSaved('homeSaved'); } else { setSectionError('deviceError', apiError(result)); }
+    });
   }
 
   function saveDeviceName() {
     var name = $('deviceNameInput').value.trim();
     if (!name) return;
-    runAction('/api/settings/device-name', { name: name }).then(refreshDevice);
+    setSectionError('deviceError', '');
+    runAction('/api/settings/device-name', { name: name }).then(function (result) {
+      if (result.status < 400) { flashSaved('nameSaved'); } else { setSectionError('deviceError', apiError(result)); }
+      refreshDevice();
+    });
   }
 
   function savePort() {
     var value = parseInt($('portInput').value, 10);
     if (!value || value < 1024 || value > 65535) {
-      banner('Port must be between 1024 and 65535.');
+      setSectionError('deviceError', 'Port must be between 1024 and 65535.');
       return;
     }
-    runAction('/api/settings/port', { port: value });
+    setSectionError('deviceError', '');
+    runAction('/api/settings/port', { port: value }).then(function (result) {
+      if (result.status < 400) { flashSaved('portSaved'); } else { setSectionError('deviceError', apiError(result)); }
+    });
   }
 
   function saveDisplay() {
     runAction('/api/display', {
       fullscreen: $('fullscreenToggle').checked,
       keepAwake: $('keepAwakeToggle').checked
+    }).then(function (result) {
+      if (result.status < 400) flashSaved('displayToggleSaved');
     });
   }
 
   function unpair() {
+    if (!confirmAction('Unpair this device? You will need the PIN shown on the TV to pair again.')) return;
     api('POST', '/api/unpair', {}).then(function () { logout(); });
   }
 
   function wire() {
+    // Tabs first: they decide which panel the other bindings live in.
+    for (var t = 0; t < TAB_NAMES.length; t++) {
+      (function (name) {
+        var button = tabButton(name);
+        if (!button) return;
+        button.addEventListener('click', function () { selectTab(name, false); });
+        button.addEventListener('keydown', tabKeyDown);
+      })(TAB_NAMES[t]);
+    }
+    var warningLink = $('qmsWarningLink');
+    if (warningLink) {
+      warningLink.addEventListener('click', function (event) {
+        event.preventDefault();
+        selectTab('content', false);
+        var first = $('mediaQmsUrlInput');
+        if (first) first.focus();
+      });
+    }
+
     $('pairButton').addEventListener('click', pair);
     $('pairPin').addEventListener('keydown', function (e) { if (e.key === 'Enter') pair(); });
     $('pairName').addEventListener('keydown', function (e) { if (e.key === 'Enter') pair(); });
@@ -1038,9 +1359,22 @@
     $('dpadOk').addEventListener('click', function () { runAction('/api/dpad', { key: 'ok' }); });
     $('dpadBack').addEventListener('click', function () { runAction('/api/dpad', { key: 'back' }); });
 
-    $('restartWebview').addEventListener('click', function () { runAction('/api/webview/restart'); });
-    $('clearCache').addEventListener('click', function () { runAction('/api/webview/clear-cache'); });
-    $('clearSiteData').addEventListener('click', function () { runAction('/api/webview/clear-site-data'); });
+    $('restartWebview').addEventListener('click', function () {
+      runAction('/api/webview/restart').then(function (result) {
+        if (result.status < 400) flashSaved('browserSaved', 'Restarting the TV browser\u2026');
+      });
+    });
+    $('clearCache').addEventListener('click', function () {
+      runAction('/api/webview/clear-cache').then(function (result) {
+        if (result.status < 400) flashSaved('browserSaved', 'Cache cleared.');
+      });
+    });
+    $('clearSiteData').addEventListener('click', function () {
+      if (!confirmAction('Clear all site data on the TV? Every site will be signed out.')) return;
+      runAction('/api/webview/clear-site-data').then(function (result) {
+        if (result.status < 400) flashSaved('browserSaved', 'Site data cleared.');
+      });
+    });
 
     $('saveHomeUrl').addEventListener('click', saveHomeUrl);
     $('saveDeviceName').addEventListener('click', saveDeviceName);
@@ -1053,18 +1387,61 @@
     $('saveMqtt').addEventListener('click', saveMqtt);
     $('clearMqttPassword').addEventListener('click', clearMqttPassword);
 
-    $('saveMedia').addEventListener('click', saveMedia);
-    $('mediaEnabledToggle').addEventListener('change', saveMedia);
-    $('playlistEnabledToggle').addEventListener('change', saveMedia);
+    $('saveMedia').addEventListener('click', function () { saveMedia('queue'); });
+    $('savePlaylistButton').addEventListener('click', function () { saveMedia('playlist'); });
+    $('saveDisplaySettings').addEventListener('click', function () { saveMedia('display'); });
+    $('saveMediaWeb').addEventListener('click', function () { saveMedia('web'); });
+    $('mediaEnabledToggle').addEventListener('change', function () { saveMedia('now'); });
+    $('playlistEnabledToggle').addEventListener('change', function () { saveMedia('playlist'); });
     $('openMediaWeb').addEventListener('click', openMediaWeb);
     $('mediaModeQms').addEventListener('click', function () { requestMediaMode('qms_only'); });
     $('mediaModeMedia').addEventListener('click', function () { requestMediaMode('media_only'); });
     $('mediaModeSplit').addEventListener('click', function () { requestMediaMode('split'); });
 
+    $('mediaPlayPause').addEventListener('click', function () {
+      mediaCommand(mediaPaused ? '/api/media/play' : '/api/media/pause');
+    });
+    $('mediaNext').addEventListener('click', function () { mediaCommand('/api/media/next'); });
+
+    var bandIds = ['mediaSplitInput', 'mediaHeaderInput', 'mediaStripInput'];
+    for (var b = 0; b < bandIds.length; b++) {
+      var band = $(bandIds[b]);
+      if (band) band.addEventListener('input', updateBandTotal);
+    }
+    var sizeIds = ['mediaCurrentNumberPxInput', 'mediaHistoryNumberPxInput', 'mediaLabelPxInput'];
+    for (var s = 0; s < sizeIds.length; s++) {
+      var size = $(sizeIds[s]);
+      if (size) size.addEventListener('input', updateSizes);
+    }
+
     $('uploadButton').addEventListener('click', uploadFiles);
     $('libraryReloadButton').addEventListener('click', rescanLibrary);
+    wireUploadDrop();
 
     $('unpairButton').addEventListener('click', unpair);
+  }
+
+  /* Dragging files onto the drop zone fills the file input, so the normal
+     upload path (and its progress and error handling) is the only path. */
+  function wireUploadDrop() {
+    var drop = $('uploadDrop');
+    if (!drop) return;
+    drop.addEventListener('dragover', function (event) {
+      event.preventDefault();
+      drop.classList.add('dragging');
+    });
+    drop.addEventListener('dragleave', function () {
+      drop.classList.remove('dragging');
+    });
+    drop.addEventListener('drop', function (event) {
+      event.preventDefault();
+      drop.classList.remove('dragging');
+      var input = $('libraryFileInput');
+      if (!input || !event.dataTransfer || !event.dataTransfer.files) return;
+      try {
+        input.files = event.dataTransfer.files;
+      } catch (e) { /* assignment unsupported: the picker still works */ }
+    });
   }
 
   function startSession() {
@@ -1072,6 +1449,8 @@
     reconnectSuspended = false;
     attempt = 0;
     show($('mainScreen'));
+    show($('tabbar'));
+    selectTab(rememberedTab() || activeTab);
     connect();
     refreshDevice();
     refreshNetworks();
