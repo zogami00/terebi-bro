@@ -43,6 +43,22 @@ class MediaWebPolicyTest {
         )
     }
 
+    /**
+     * Device report: RTMKlik fullscreen in Split dropped out after every
+     * called number, because the QMS_FOCUS takeover closed it.
+     */
+    @Test
+    fun `an open fullscreen survives a QMS focus takeover but not leaving the band`() {
+        for (mode in listOf(MediaMode.SPLIT, MediaMode.MEDIA_ONLY, MediaMode.QMS_FOCUS)) {
+            assertTrue("kept in $mode", MediaWebPolicy.keepsMediaFullscreen(true, true, mode))
+        }
+        assertFalse(MediaWebPolicy.keepsMediaFullscreen(true, true, MediaMode.QMS_ONLY))
+        assertFalse(MediaWebPolicy.keepsMediaFullscreen(false, true, MediaMode.SPLIT))
+        assertFalse(MediaWebPolicy.keepsMediaFullscreen(true, false, MediaMode.SPLIT))
+        // Starting one during the takeover is still refused.
+        assertFalse(MediaWebPolicy.allowsMediaFullscreen(true, true, MediaMode.QMS_FOCUS))
+    }
+
     @Test
     fun `fullscreen needs a web source and media mode`() {
         assertFalse(

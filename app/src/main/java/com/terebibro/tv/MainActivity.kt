@@ -1252,11 +1252,11 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
         } else {
             MediaMode.QMS_ONLY
         }
-        // A fullscreen view only makes sense while the band owns the screen: a
-        // QMS_FOCUS takeover (or leaving the web source) must hide it first,
-        // exactly like showMenu() does for the QMS custom view.
+        // A fullscreen view survives a QMS_FOCUS takeover: the band (and the
+        // view inside it) is hidden for the call and comes back with it.
+        // Leaving for QMS_ONLY, media mode off, or a different source closes it.
         if (mediaFullscreenView != null &&
-            !MediaWebPolicy.allowsMediaFullscreen(
+            !MediaWebPolicy.keepsMediaFullscreen(
                 config.mediaSettings.enabled,
                 mediaController.isWebSource(),
                 mode
@@ -1499,7 +1499,13 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
                 true
             }
             BackOrder.Action.HIDE_FULLSCREEN -> {
-                if (mediaFullscreenView != null) hideMediaFullscreen() else hideCustomView()
+                // Close the one on screen; a media fullscreen kept through
+                // QMS_FOCUS is hidden with the band.
+                if (mediaFullscreenView != null && mediaContainer.visibility == View.VISIBLE) {
+                    hideMediaFullscreen()
+                } else {
+                    hideCustomView()
+                }
                 true
             }
             // Back inside the media workspace: leave it. Without this rung the
@@ -1547,7 +1553,10 @@ class MainActivity : Activity(), WebViewController.Listener, ControllerHost, Mqt
     private fun backState(): BackOrder.BackState = BackOrder.BackState(
         infoOverlayVisible = infoOverlay.visibility == View.VISIBLE,
         errorOverlayVisible = errorOverlay.visibility == View.VISIBLE,
-        fullscreenVisible = customView != null || mediaFullscreenView != null,
+        // A media fullscreen kept through QMS_FOCUS is hidden with the band;
+        // Back must not silently close what the viewer cannot see.
+        fullscreenVisible = customView != null ||
+            (mediaFullscreenView != null && mediaContainer.visibility == View.VISIBLE),
         canGoBack = webViewController.canGoBackOnMain(),
         atHome = HomeUrlMatcher.samePage(webViewController.currentUrl(), config.homeUrl),
         menuVisible = menuOverlay.visibility == View.VISIBLE,
