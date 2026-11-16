@@ -55,8 +55,8 @@ android {
         // path falls back to the legacy systemUiVisibility flags below API 30.
         minSdk = 28
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.6.1"
+        versionCode = 11
+        versionName = "0.6.2"
     }
 
     signingConfigs {
