@@ -25,6 +25,22 @@ object MediaWebPolicy {
         (mode == MediaMode.MEDIA_ONLY || mode == MediaMode.SPLIT)
 
     /**
+     * Whether a fullscreen view that is already up survives the current mode.
+     * Stricter than [allowsMediaFullscreen] for starting one, looser for
+     * keeping one: a `QMS_FOCUS` takeover hides the whole media band (and the
+     * fullscreen view inside it) for the call, then hands the screen back to
+     * the previous mode. Exiting fullscreen there forced the viewer to press
+     * the player's fullscreen button again after every called number.
+     * Leaving for `QMS_ONLY`, turning media mode off, or the page no longer
+     * being the source still closes it.
+     */
+    fun keepsMediaFullscreen(
+        mediaEnabled: Boolean,
+        webSource: Boolean,
+        mode: MediaMode
+    ): Boolean = mediaEnabled && webSource && mode != MediaMode.QMS_ONLY
+
+    /**
      * Whether the QMS surface must be hidden outright rather than covered.
      *
      * `MEDIA_ONLY` gives the media band the whole screen; the QMS page is not
